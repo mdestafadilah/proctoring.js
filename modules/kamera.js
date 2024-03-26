@@ -1,5 +1,5 @@
 var videoElem = document.getElementById("video");
-var btnElm = document.getElementById("btnKamera").innerHTML = 'Kamera On!';
+var btnElm = document.getElementById("btnKamera");
 var isPlaying = !!videoElem.srcObject;
 
 if (!isPlaying) {

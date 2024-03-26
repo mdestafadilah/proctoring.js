@@ -6,6 +6,7 @@ import { setupCounter } from './counter.js'
 
 // Load Modules Here
 import { vis } from './modules/tabs.js';
+// import { cameraoff, cameraon, cameraonoff } from './modules/kamera.js';
 
 document.querySelector('#app').innerHTML = `
   <div>
@@ -18,6 +19,10 @@ document.querySelector('#app').innerHTML = `
     <h1>Hello!</h1>
     <div class="card">
       <button id="counter" type="button"></button>
+      <button id="btnKamera" type="button" ></button>
+      <div>
+        <video id="video" class="video-style" autoplay=""></video>
+      </div>
     </div>
     <p class="read-the-docs">
       Proctoring System build with Vite.JS by Desta
