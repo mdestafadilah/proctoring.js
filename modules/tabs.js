@@ -1,5 +1,7 @@
 export function vis(c) {
-    let self = this
+    let item = '';
+    let eventKey = '';
+
     const browserProps = {
         hidden: "visibilitychange",
         msHidden: "msvisibilitychange",
@@ -11,12 +13,11 @@ export function vis(c) {
             eventKey = browserProps[item]
             break
         }
-    }	
-
+    }
+    
     if (c) {
-        if (!self._init && !(typeof document.addEventListener === "undefined")) {
+        if (!(typeof document.addEventListener === "undefined")) {
             document.addEventListener(eventKey, c)
-            self._init = true
             c()
         } 
     }

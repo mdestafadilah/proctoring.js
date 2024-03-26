@@ -3,6 +3,10 @@ import javascriptLogo from './javascript.svg'
 import viteLogo from '/vite.svg'
 import { setupCounter } from './counter.js'
 
+
+// Load Modules Here
+import { vis } from './modules/tabs.js';
+
 document.querySelector('#app').innerHTML = `
   <div>
     <a href="https://vitejs.dev" target="_blank">
@@ -20,5 +24,10 @@ document.querySelector('#app').innerHTML = `
     </p>
   </div>
 `
+
+vis(() => {
+  let tabVisibility = vis() ? 'Visible' : 'Not visible';
+  console.log(tabVisibility);
+});
 
 setupCounter(document.querySelector('#counter'))
