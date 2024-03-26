@@ -15,6 +15,8 @@
     "@tensorflow/tfjs": "^4.17.0",
     "@vladmandic/face-api": "^1.7.13",
     "canvas": "^2.11.2",
+    "fs": "^0.0.1-security",
+    "path": "^0.12.7",
     "whistle-detection": "^1.0.3"
   }
 }
