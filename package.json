@@ -9,6 +9,9 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@tensorflow/tfjs": "^4.19.0",
+    "@vladmandic/face-api": "^1.7.13",
+    "canvas": "^2.11.2",
     "preact": "^10.19.6"
   },
   "devDependencies": {
