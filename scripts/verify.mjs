@@ -54,6 +54,7 @@ const {
   isVisualViolation,
   dataUrlBytes,
   FaceDetector,
+  AudioDetector,
   version,
 } = esm;
 
@@ -374,6 +375,139 @@ check('a zero-sized video frame does not divide by zero', () => {
   detector._evaluate([detectionAt(0.08, 0.5)], { videoWidth: 0, videoHeight: 0 });
   // Infinity offsets would fire; NaN comparisons must fall through instead.
   assert.deepEqual(violations, [], 'a degenerate frame size must be ignored');
+});
+
+// ---------------------------------------------------------------------------
+group('audio decision logic');
+
+/**
+ * Drives AudioDetector._sample() with a stubbed AnalyserNode.
+ *
+ * A real microphone cannot be made to produce a known loudness on demand, so the
+ * threshold/grace/re-arm rules are tested here deterministically. The live
+ * pipeline (getUserMedia → AudioContext → sampler) is covered by
+ * verify-browser.mjs.
+ */
+function makeAudioHarness(overrides = {}) {
+  const violations = [];
+  const config = {
+    rmsThreshold: 0.08,
+    loudGraceMs: 1000,
+    voiceThreshold: 0.5,
+    fftSize: 1024,
+    smoothingTimeConstant: 0.8,
+    detectMultipleVoices: false,
+    throttleMs: 0,
+    ...overrides,
+  };
+  const context = {
+    options: {},
+    report: (type, details, meta) => violations.push({ type, details, ...meta }),
+    log: () => {},
+    emit: () => {},
+    setState: () => {},
+  };
+  const detector = new AudioDetector(config, context);
+
+  /** Point the analyser at a constant amplitude, as if the mic heard it. */
+  detector.analyser = {
+    fftSize: config.fftSize,
+    frequencyBinCount: 512,
+    getFloatTimeDomainData(buffer) {
+      buffer.fill(detector._amplitude ?? 0);
+    },
+    getByteFrequencyData(array) {
+      array.fill(detector._density ?? 0);
+    },
+  };
+  detector.buffer = new Float32Array(config.fftSize);
+  detector.freqData = new Uint8Array(512);
+
+  return { detector, violations };
+}
+
+check('silence produces no violation', () => {
+  const { detector, violations } = makeAudioHarness();
+  detector._amplitude = 0;
+  for (let i = 0; i < 10; i += 1) detector._sample();
+  assert.deepEqual(violations, []);
+});
+
+check('a loud room past the grace period produces audio-too-loud', () => {
+  const { detector, violations } = makeAudioHarness({ loudGraceMs: 0 });
+  detector._amplitude = 0.5;
+  detector._sample();
+  assert.equal(violations.length, 1);
+  assert.equal(violations[0].type, 'audio-too-loud');
+  assert.ok(violations[0].details.rms > 0.08, 'the violation must record the measured level');
+  assert.equal(violations[0].details.threshold, 0.08);
+});
+
+check('the grace period suppresses a brief spike', () => {
+  const { detector, violations } = makeAudioHarness({ loudGraceMs: 60_000 });
+  detector._amplitude = 0.5;
+  detector._sample();
+  assert.deepEqual(violations, [], 'a short spike must not fire before the grace period');
+});
+
+check('sustained loudness does not spam violations', () => {
+  const { detector, violations } = makeAudioHarness({ loudGraceMs: 0 });
+  detector._amplitude = 0.5;
+  for (let i = 0; i < 20; i += 1) detector._sample();
+  assert.equal(violations.length, 1, 'a continuous noise must be reported once, not per sample');
+});
+
+check('the room must quieten down before it can fire again', () => {
+  const { detector, violations } = makeAudioHarness({ loudGraceMs: 0 });
+  detector._amplitude = 0.5;
+  detector._sample();
+  assert.equal(violations.length, 1);
+
+  // Loud again without a quiet gap: still only one violation.
+  detector._sample();
+  assert.equal(violations.length, 1);
+
+  // Drop well below the re-arm point (60% of threshold), then go loud again.
+  detector._amplitude = 0;
+  detector._sample();
+  detector._amplitude = 0.5;
+  detector._sample();
+  assert.equal(violations.length, 2, 'a genuine second noise must be reported');
+});
+
+check('a level just under the threshold is ignored', () => {
+  const { detector, violations } = makeAudioHarness({ loudGraceMs: 0, rmsThreshold: 0.08 });
+  detector._amplitude = 0.07;
+  for (let i = 0; i < 5; i += 1) detector._sample();
+  assert.deepEqual(violations, [], 'below-threshold noise must never fire');
+});
+
+check('detectMultipleVoices is off by default', () => {
+  const { detector, violations } = makeAudioHarness({ loudGraceMs: 60_000 });
+  detector._amplitude = 0;
+  detector._density = 255;
+  for (let i = 0; i < 5; i += 1) detector._sample();
+  assert.deepEqual(violations, [], 'spectral analysis must be opt-in');
+});
+
+check('spectral density reports multiple voices when enabled', () => {
+  const { detector, violations } = makeAudioHarness({
+    detectMultipleVoices: true,
+    loudGraceMs: 60_000,
+  });
+  detector._amplitude = 0;
+  detector._density = 255;
+  detector._sample();
+  assert.equal(violations.length, 1);
+  assert.equal(violations[0].type, 'audio-multiple-voices');
+  assert.ok(violations[0].details.density >= 0.5);
+});
+
+check('_sample is a no-op before the analyser exists', () => {
+  const context = { options: {}, report: () => {}, log: () => {}, emit: () => {}, setState: () => {} };
+  const detector = new AudioDetector({ rmsThreshold: 0.08, fftSize: 1024 }, context);
+  // Must not throw when called before init().
+  detector._sample();
 });
 
 // ---------------------------------------------------------------------------

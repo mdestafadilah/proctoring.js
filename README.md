@@ -406,15 +406,15 @@ not as proof.
 npm install
 npm run dev              # demo page at http://localhost:5173/demo.html
 npm run build            # emits dist/proctoring.js, .cjs, .umd.js + index.d.ts
-npm test                 # build + 48 checks against the built artifact
+npm test                 # build + 57 checks against the built artifact
 ```
 
-Four suites, 80 checks in total:
+Four suites, 93 checks in total:
 
 | Command | Checks | What it proves |
 |---|---|---|
-| `npm run verify` | 48 | Build output, exports, report math, screenshot helpers, face decision logic |
-| `npm run verify:browser` | 19 | Real Edge: tab switch, camera stream, teardown, screenshot capture |
+| `npm run verify` | 57 | Build output, exports, report math, screenshot helpers, face + audio decision logic |
+| `npm run verify:browser` | 23 | Real Edge: tab switch, camera stream, audio sampler, teardown, screenshots |
 | `npm run verify:umd` | 6 | The `<script src>` path via a plain static server |
 | `npm run verify:face` | 7 | face-api CDN + weights resolve and inference runs |
 
@@ -430,7 +430,18 @@ npm run verify:face                       # downloads ~2MB of models
 ```
 
 They launch Edge with `--use-fake-device-for-media-stream`, so the camera and
-face checks run with no physical webcam and no permission prompt.
+audio checks run with no physical hardware and no permission prompt.
+
+Two deliberate testing choices worth knowing:
+
+- **Detector decision rules are unit-tested with synthetic input**, not through
+  a real face or microphone. A real camera cannot be made to show exactly two
+  faces on demand, so `_evaluate` / `_sample` are driven directly with stubbed
+  detections and analyser buffers. That tests *our* thresholds and grace
+  periods deterministically; face-api's detection accuracy is upstream's concern.
+- **The synthetic microphone is silent**, so the browser suite asserts the
+  absence of a false positive rather than a real `audio-too-loud` event. The
+  loud path is covered by the stubbed-analyser tests.
 
 > The UMD check spawns its own static server rather than using Vite, because
 > Vite's dev server pipes every `.js` through its ESM transform and would inject

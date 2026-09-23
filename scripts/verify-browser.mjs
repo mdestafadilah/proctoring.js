@@ -21,9 +21,15 @@ function ok(label) {
 const page = await launchEdge({
   port: 9361,
   profileDir: `${process.env.TEMP}\\pjs-edge-profile`,
-  // A synthetic webcam + auto-accepted permission, so the camera and screenshot
-  // checks run on any machine (CI included) with no hardware and no prompt.
-  extraArgs: ['--use-fake-device-for-media-stream', '--use-fake-ui-for-media-stream'],
+  // A synthetic webcam + microphone and auto-accepted permission, so the
+  // camera, audio and screenshot checks run on any machine (CI included) with
+  // no hardware and no prompt. The autoplay flag lets AudioContext start
+  // without a user gesture, which headless runs never produce.
+  extraArgs: [
+    '--use-fake-device-for-media-stream',
+    '--use-fake-ui-for-media-stream',
+    '--autoplay-policy=no-user-gesture-required',
+  ],
 });
 
 try {
@@ -378,7 +384,86 @@ try {
   }
 
   // ---------------------------------------------------------------------
-  // 7. No console noise.
+  // 7. Audio detector against a real microphone stream.
+  // ---------------------------------------------------------------------
+  console.log('\nBrowser: audio detector');
+
+  const audio = await page.evaluate(`(async () => {
+    const { Proctor } = await import('/src/index.js');
+
+    const proctor = new Proctor({
+      logLevel: 'silent',
+      report: { persist: false },
+      tabs: { enabled: false },
+      // A very low threshold so a false positive on silence would be caught.
+      audio: { enabled: true, rmsThreshold: 0.001, loudGraceMs: 200, throttleMs: 0 },
+    });
+
+    const events = [];
+    proctor.on('detector:ready', ({ detector }) => events.push({ ready: detector }));
+    proctor.on('detector:error', ({ detector, error }) =>
+      events.push({ failed: detector, message: error.message })
+    );
+    proctor.on('violation', (v) => events.push({ type: v.type, details: v.details }));
+
+    await proctor.start();
+    await new Promise((r) => setTimeout(r, 1200));
+
+    const state = proctor.getDetectorState('audio');
+    const detector = proctor.getDetector('audio');
+    // Hold the context reference: destroy() nulls the detector's own field, so
+    // the state must be read through this handle afterwards.
+    const ctx = detector?.audioContext ?? null;
+    const ctxBefore = ctx?.state ?? null;
+    const report = proctor.getReport();
+
+    proctor.destroy();
+    const ctxClosed = ctx ? ctx.state === 'closed' : null;
+
+    return {
+      events,
+      ready: events.some((e) => e.ready === 'audio'),
+      failed: events.find((e) => e.failed === 'audio') ?? null,
+      state,
+      ctxBefore,
+      ctxClosed,
+      types: Object.keys(report.countsByType),
+    };
+  })()`);
+
+  const audioFailed = audio.events.find((e) => e.failed === 'audio');
+  assert.ok(!audioFailed, `audio detector failed to initialise: ${audioFailed?.message ?? 'unknown'}`);
+  assert.ok(
+    audio.events.some((e) => e.ready === 'audio'),
+    `audio detector never became ready: ${JSON.stringify(audio.events)}`
+  );
+  ok('audio detector initialises with a live microphone stream');
+
+  assert.ok(audio.state, 'audio detector must publish a state');
+  assert.equal(audio.state.status, 'running', `unexpected status: ${audio.state.status}`);
+  assert.equal(
+    typeof audio.state.rms,
+    'number',
+    `the sampler never ran — no rms published: ${JSON.stringify(audio.state)}`
+  );
+  ok(`loudness sampling runs (rms=${audio.state.rms.toFixed(4)}, ctx=${audio.ctxBefore})`);
+
+  // Edge's synthetic microphone emits silence. That makes this a false-positive
+  // test: a silent room must never be reported as noise, even with the
+  // threshold set absurdly low. The loud path is covered deterministically by
+  // the stubbed-analyser tests in verify.mjs.
+  assert.deepEqual(
+    audio.types,
+    [],
+    `a silent room must not produce violations, got: ${JSON.stringify(audio.types)}`
+  );
+  ok('a silent room produces no false "audio-too-loud" violation');
+
+  assert.equal(audio.ctxClosed, true, 'destroy() must close the AudioContext');
+  ok('destroy() closes the AudioContext (microphone is released)');
+
+  // ---------------------------------------------------------------------
+  // 8. No console noise.
   // ---------------------------------------------------------------------
   console.log('\nBrowser: console');
   const realErrors = page.errors.filter(
