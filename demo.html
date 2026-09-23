@@ -1,0 +1,326 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>proctoring.js — demo</title>
+    <style>
+      :root {
+        --bg: #f8fafc;
+        --panel: #ffffff;
+        --border: #e2e8f0;
+        --text: #0f172a;
+        --muted: #64748b;
+        --accent: #2563eb;
+        --ok: #059669;
+        --warn: #d97706;
+        --bad: #dc2626;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        padding: 24px;
+        font: 14px/1.6 Inter, system-ui, -apple-system, sans-serif;
+        background: var(--bg);
+        color: var(--text);
+      }
+      main { max-width: 960px; margin: 0 auto; }
+      h1 { font-size: 20px; margin: 0 0 4px; }
+      .sub { color: var(--muted); margin: 0 0 20px; font-size: 13px; }
+      .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+      @media (max-width: 720px) { .grid { grid-template-columns: 1fr; } }
+      .panel {
+        background: var(--panel);
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        padding: 16px;
+      }
+      .panel h2 {
+        font-size: 12px;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+        color: var(--muted);
+        margin: 0 0 12px;
+      }
+      video {
+        width: 100%;
+        border-radius: 8px;
+        background: #0f172a;
+        aspect-ratio: 4 / 3;
+        object-fit: cover;
+      }
+      .controls { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
+      button {
+        font: inherit;
+        font-size: 13px;
+        padding: 7px 14px;
+        border-radius: 7px;
+        border: 1px solid var(--border);
+        background: #fff;
+        color: var(--text);
+        cursor: pointer;
+      }
+      button:hover { border-color: var(--accent); color: var(--accent); }
+      button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+      button.primary:hover { opacity: 0.9; color: #fff; }
+      button:disabled { opacity: 0.45; cursor: not-allowed; }
+      label.toggle {
+        display: flex;
+        align-items: center;
+        gap: 7px;
+        font-size: 13px;
+        padding: 7px 11px;
+        border: 1px solid var(--border);
+        border-radius: 7px;
+        background: #fff;
+        cursor: pointer;
+      }
+      label.toggle input { accent-color: var(--accent); }
+      .stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }
+      .stat {
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        padding: 10px;
+        text-align: center;
+      }
+      .stat .num { font-size: 20px; font-weight: 600; }
+      .stat .lbl { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; }
+      #log {
+        height: 320px;
+        overflow-y: auto;
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        font-size: 12px;
+        background: #0f172a;
+        color: #e2e8f0;
+        border-radius: 8px;
+        padding: 12px;
+      }
+      .row { display: flex; gap: 8px; padding: 3px 0; border-bottom: 1px solid #1e293b; }
+      .row:last-child { border-bottom: none; }
+      .row .t { color: #64748b; flex: 0 0 auto; }
+      .sev { flex: 0 0 auto; font-weight: 600; }
+      .sev-info { color: #94a3b8; }
+      .sev-low { color: #38bdf8; }
+      .sev-medium { color: #fbbf24; }
+      .sev-high { color: #fb923c; }
+      .sev-critical { color: #f87171; }
+      .det { color: #cbd5e1; }
+      .ttl { font-size: 16px; font-weight: 600; margin: 16px 0 8px; }
+      .hidden { display: none; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>proctoring.js</h1>
+      <p class="sub">Live demo of all four detectors. Open a second tab, cover the camera, or make some noise.</p>
+
+      <div class="panel" style="margin-bottom: 16px">
+        <h2>Session</h2>
+        <div class="controls">
+          <button id="btnStart" class="primary">Start session</button>
+          <button id="btnStop" disabled>Stop</button>
+          <button id="btnCsv" disabled>Download CSV</button>
+          <button id="btnReset" disabled>Reset</button>
+        </div>
+        <div class="controls">
+          <label class="toggle"><input type="checkbox" id="optTabs" checked /> tabs</label>
+          <label class="toggle"><input type="checkbox" id="optCamera" checked /> camera</label>
+          <label class="toggle"><input type="checkbox" id="optFace" /> face</label>
+          <label class="toggle"><input type="checkbox" id="optAudio" /> audio</label>
+          <label class="toggle"><input type="checkbox" id="optShots" /> screenshots</label>
+          <label class="toggle"><input type="checkbox" id="optBackend" /> backend (mock)</label>
+        </div>
+        <div id="status" class="sub" style="margin: 0">Idle.</div>
+      </div>
+
+      <div class="grid">
+        <div class="panel">
+          <h2>Camera preview</h2>
+          <video id="preview" autoplay muted playsinline></video>
+        </div>
+        <div class="panel">
+          <h2>Stats</h2>
+          <div class="stats">
+            <div class="stat"><div class="num" id="statTotal">0</div><div class="lbl">Total</div></div>
+            <div class="stat"><div class="num" id="statScore">100</div><div class="lbl">Score</div></div>
+            <div class="stat"><div class="num" id="statFaces">–</div><div class="lbl">Faces</div></div>
+            <div class="stat"><div class="num" id="statRms">–</div><div class="lbl">RMS</div></div>
+          </div>
+          <div class="ttl">Detectors</div>
+          <div id="detectors" style="font-size: 13px"></div>
+        </div>
+      </div>
+
+      <div class="ttl">Event log</div>
+      <div id="log"></div>
+    </main>
+
+    <script type="module">
+      import { Proctor, formatDuration, downloadReportCsv } from '/src/index.js';
+
+      const $ = (id) => document.getElementById(id);
+      const logEl = $('log');
+      const statusEl = $('status');
+
+      let proctor = null;
+      let backendCalls = [];
+
+      function log(kind, message, severity = null, screenshot = null) {
+        const time = new Date().toLocaleTimeString();
+        const row = document.createElement('div');
+        row.className = 'row';
+        // Render the captured frame inline so a screenshot is visibly present,
+        // not just a boolean in the payload.
+        const thumb = screenshot
+          ? `<img src="${screenshot}" alt="captured frame"
+                 style="height:40px;border-radius:4px;border:1px solid #334155;flex:0 0 auto">`
+          : '';
+        row.innerHTML =
+          `<span class="t">${time}</span>` +
+          (severity ? `<span class="sev sev-${severity}">${severity}</span>` : '') +
+          thumb +
+          `<span class="${kind === 'violation' ? 'det" ' : ''}">${message}</span>`;
+        logEl.appendChild(row);
+        logEl.scrollTop = logEl.scrollHeight;
+      }
+
+      /** Stand-in for a real API so the demo runs with no server. */
+      function fakeFetch(url, init) {
+        const body = JSON.parse(init.body);
+        backendCalls.push(body);
+        console.log('[demo] would POST to', url, body);
+        return Promise.resolve({ ok: true, status: 200 });
+      }
+
+      async function start() {
+        const options = {
+          sessionId: `demo-${Date.now()}`,
+          logLevel: 'debug',
+          tabs: { enabled: $('optTabs').checked },
+          camera: {
+            enabled: $('optCamera').checked || $('optFace').checked,
+            videoElement: '#preview',
+          },
+          face: { enabled: $('optFace').checked },
+          audio: { enabled: $('optAudio').checked },
+          report: {
+            // Attach a downscaled webcam frame to camera/face violations.
+            captureScreenshots: $('optShots').checked,
+            screenshotMaxWidth: 320,
+          },
+          backend: {
+            enabled: $('optBackend').checked,
+            endpoint: 'https://example.test/proctoring',
+            includeReport: false,
+          },
+        };
+
+        proctor = new Proctor(options);
+
+        if ($('optBackend').checked) {
+          // Intercept only this hostname so nothing else in the page is affected.
+          const realFetch = window.fetch;
+          window.fetch = (url, init) =>
+            String(url).startsWith('https://example.test') ? fakeFetch(url, init) : realFetch(url, init);
+        }
+
+        proctor.on('violation', (v) => {
+          log('violation', `${v.type} — ${JSON.stringify(v.details)}`, v.severity, v.screenshot);
+          refreshStats();
+        });
+
+        proctor.on('detector:ready', ({ detector }) => log('info', `detector "${detector}" ready`));
+        proctor.on('detector:error', ({ detector, error }) =>
+          log('error', `detector "${detector}" failed: ${error.message}`)
+        );
+        proctor.on('log', ({ level, message }) => {
+          if (level === 'debug' || level === 'info') log('log', `[${level}] ${message}`);
+        });
+
+        try {
+          await proctor.start();
+        } catch (err) {
+          log('error', `start failed: ${err.message}`);
+          return;
+        }
+
+        statusEl.textContent = `Running — session ${proctor.options.sessionId}`;
+        $('btnStart').disabled = true;
+        $('btnStop').disabled = false;
+        $('btnReset').disabled = false;
+        refreshStats();
+        startStatusPolling();
+      }
+
+      let pollTimer = null;
+      function startStatusPolling() {
+        clearInterval(pollTimer);
+        pollTimer = setInterval(() => {
+          const faces = proctor?.getDetectorState('face');
+          if (faces?.faceCount != null) $('statFaces').textContent = faces.faceCount;
+
+          const audio = proctor?.getDetectorState('audio');
+          if (audio?.rms != null) $('statRms').textContent = audio.rms.toFixed(3);
+
+          const lines = [];
+          for (const name of ['tabs', 'camera', 'face', 'audio']) {
+            const state = proctor?.getDetectorState(name);
+            const running = Boolean(proctor?.getDetector(name));
+            const dot = running ? '●' : '○';
+            const color = running ? 'var(--ok)' : 'var(--muted)';
+            lines.push(
+              `<div style="color:${color}">${dot} <strong>${name}</strong> — ${
+                state?.status ?? (running ? 'starting' : 'off')
+              }</div>`
+            );
+          }
+          $('detectors').innerHTML = lines.join('');
+        }, 400);
+      }
+
+      function refreshStats() {
+        const report = proctor?.getReport();
+        if (!report) return;
+        $('statTotal').textContent = report.total;
+        $('statScore').textContent = report.score;
+      }
+
+      function stop() {
+        clearInterval(pollTimer);
+        const report = proctor?.stop();
+        if (report) {
+          log('info', `stopped — ${report.total} violation(s), duration ${formatDuration(report.durationMs)}`);
+          console.table(report.countsByType);
+          $('statScore').textContent = report.score;
+        }
+        statusEl.textContent = 'Stopped.';
+        $('btnStart').disabled = false;
+        $('btnStop').disabled = true;
+      }
+
+      function reset() {
+        proctor?.clearViolations();
+        backendCalls = [];
+        logEl.innerHTML = '';
+        refreshStats();
+        log('info', 'report cleared');
+      }
+
+      $('btnStart').addEventListener('click', start);
+      $('btnStop').addEventListener('click', stop);
+      $('btnReset').addEventListener('click', reset);
+      $('btnCsv').addEventListener('click', () => {
+        const report = proctor?.getReport();
+        if (report) downloadReportCsv(report, 'proctoring-report.csv');
+      });
+
+      for (const id of ['optFace']) {
+        $(id).addEventListener('change', () => {
+          if ($('optFace').checked) $('optCamera').checked = true;
+        });
+      }
+
+      log('info', 'ready — pick your detectors and press Start');
+    </script>
+  </body>
+</html>
