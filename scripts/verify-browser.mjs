@@ -7,20 +7,22 @@
  *
  * Run headful-free via Edge + CDP. The driver is vendored at ./lib/cdp.mjs.
  */
-import { launchEdge } from './lib/cdp.mjs';
+import { launchEdge, tmpProfile, resolveBrowserPath, DEFAULT_EDGE_PATHS } from './lib/cdp.mjs';
 import { version } from './lib/pkg.mjs';
 import { strict as assert } from 'node:assert';
-import { mkdirSync } from 'node:fs';
-import { dirname, resolve } from 'node:path';
+import { existsSync, mkdirSync } from 'node:fs';
+import { dirname, isAbsolute, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const BASE = 'http://localhost:5180';
 const passed = [];
 
+const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+
 // Derived from this file rather than hardcoded, so the script works from any
 // checkout. `outputs/` is gitignored, so a fresh clone has no such directory and
 // the run would otherwise die on its very last step.
-const OUT_DIR = resolve(dirname(fileURLToPath(import.meta.url)), '..', 'outputs');
+const OUT_DIR = resolve(REPO_ROOT, 'outputs');
 mkdirSync(OUT_DIR, { recursive: true });
 
 function ok(label) {
@@ -30,7 +32,7 @@ function ok(label) {
 
 const page = await launchEdge({
   port: 9361,
-  profileDir: `${process.env.TEMP}\\pjs-edge-profile`,
+  profileDir: tmpProfile('pjs-edge-profile'),
   // A synthetic webcam + microphone and auto-accepted permission, so the
   // camera, audio and screenshot checks run on any machine (CI included) with
   // no hardware and no prompt. The autoplay flag lets AudioContext start
@@ -1551,7 +1553,78 @@ try {
   ok('stopPageCapture() releases the shared surface');
 
   // ---------------------------------------------------------------------
-  // 14. No console noise.
+  // 14. Browser discovery is configurable and portable.
+  //
+  //     All four CDP suites depend on finding a browser, and that path used to
+  //     be Windows-only — both the candidate list and the profile directory,
+  //     which was built from `%TEMP%`. These checks pin the two properties that
+  //     make the suites runnable elsewhere: a configurable override, and a
+  //     candidate list that is not Windows-only.
+  // ---------------------------------------------------------------------
+  console.log('\nBrowser: driver discovery');
+
+  const realBrowser = resolveBrowserPath();
+  assert.ok(
+    realBrowser && existsSync(realBrowser),
+    `the driver must find a browser on this machine, got ${realBrowser}`
+  );
+  ok('the driver finds a browser on this machine with no EDGE_PATH set');
+
+  const hasWindows = DEFAULT_EDGE_PATHS.some((path) => /^[A-Za-z]:\\/.test(path));
+  const hasPosix = DEFAULT_EDGE_PATHS.some((path) => path.startsWith('/'));
+  assert.ok(hasWindows, 'the Windows candidates must stay in the list');
+  assert.ok(
+    hasPosix,
+    `the candidate list must cover Linux too: ${JSON.stringify(DEFAULT_EDGE_PATHS)}`
+  );
+  ok('the built-in candidate list covers Windows and POSIX paths');
+
+  const previousEdgePath = process.env.EDGE_PATH;
+  try {
+    process.env.EDGE_PATH = realBrowser;
+    assert.equal(resolveBrowserPath(), realBrowser);
+    ok('EDGE_PATH overrides the built-in candidates');
+
+    // A path that is set but wrong must stop the run. Silently testing a
+    // different browser than the one you configured is the failure that would
+    // never be noticed, because every check would still pass.
+    process.env.EDGE_PATH = '/no/such/browser';
+    assert.throws(
+      () => resolveBrowserPath(),
+      /EDGE_PATH points at nothing/,
+      'a wrong EDGE_PATH must fail loudly'
+    );
+    ok('a wrong EDGE_PATH stops the run instead of falling back silently');
+
+    assert.throws(
+      () => resolveBrowserPath({ edgePath: '/no/such/browser' }),
+      /points at nothing/,
+      'a wrong edgePath argument must fail the same way'
+    );
+    ok('a wrong edgePath argument fails the same way');
+
+    process.env.EDGE_PATH = '   ';
+    assert.equal(resolveBrowserPath(), realBrowser, 'a blank EDGE_PATH counts as unset');
+    ok('a blank EDGE_PATH is treated as unset');
+  } finally {
+    if (previousEdgePath === undefined) delete process.env.EDGE_PATH;
+    else process.env.EDGE_PATH = previousEdgePath;
+  }
+
+  // The profile must live outside the repo on every platform: `%TEMP%` does not
+  // exist on Linux, where the old template string produced a *relative* path and
+  // dropped the profile inside the working tree — the one place it must not be,
+  // because Vite watches those files and reloads mid-check.
+  const probeProfile = tmpProfile('pjs-probe');
+  assert.ok(isAbsolute(probeProfile), `the profile path must be absolute, got ${probeProfile}`);
+  assert.ok(
+    !resolve(probeProfile).toLowerCase().startsWith(REPO_ROOT.toLowerCase()),
+    `the profile must live outside the repo, got ${probeProfile}`
+  );
+  ok('tmpProfile() yields an absolute path outside the repository');
+
+  // ---------------------------------------------------------------------
+  // 15. No console noise.
   // ---------------------------------------------------------------------
   console.log('\nBrowser: console');
   const realErrors = page.errors.filter(

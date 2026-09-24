@@ -11,7 +11,7 @@
  *
  *   bun scripts/verify-static-demo.mjs
  */
-import { launchEdge } from './lib/cdp.mjs';
+import { launchEdge, tmpProfile } from './lib/cdp.mjs';
 import { version } from './lib/pkg.mjs';
 import { strict as assert } from 'node:assert';
 import { spawn } from 'node:child_process';
@@ -52,7 +52,7 @@ console.log(LIVE_URL ? `Menguji URL live: ${LIVE_URL}` : `Menguji folder lokal: 
 
 const page = await launchEdge({
   port: 9367,
-  profileDir: `${process.env.TEMP}\\pjs-static-profile`,
+  profileDir: tmpProfile('pjs-static-profile'),
   extraArgs: [
     '--use-fake-device-for-media-stream',
     '--use-fake-ui-for-media-stream',

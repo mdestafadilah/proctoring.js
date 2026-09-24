@@ -15,7 +15,7 @@
  *   python -m http.server 5199 --bind 127.0.0.1     # from the repo root
  *   bun scripts/verify-umd.mjs
  */
-import { launchEdge } from './lib/cdp.mjs';
+import { launchEdge, tmpProfile } from './lib/cdp.mjs';
 import { version } from './lib/pkg.mjs';
 import { strict as assert } from 'node:assert';
 import { spawn } from 'node:child_process';
@@ -42,7 +42,7 @@ const server = spawn(python, ['-m', 'http.server', String(PORT), '--bind', '127.
 // Give the static server a moment to bind.
 await new Promise((r) => setTimeout(r, 1500));
 
-const page = await launchEdge({ port: 9365, profileDir: `${process.env.TEMP}\\pjs-umd-profile` });
+const page = await launchEdge({ port: 9365, profileDir: tmpProfile('pjs-umd-profile') });
 
 try {
   await page.goto('/scripts/umd-smoke.html', { baseUrl: ORIGIN });

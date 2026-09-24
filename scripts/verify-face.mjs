@@ -15,7 +15,7 @@
  *
  *   bun scripts/verify-face.mjs
  */
-import { launchEdge } from './lib/cdp.mjs';
+import { launchEdge, tmpProfile } from './lib/cdp.mjs';
 import { strict as assert } from 'node:assert';
 
 const BASE = 'http://localhost:5180';
@@ -27,7 +27,7 @@ const ok = (label) => {
 
 const page = await launchEdge({
   port: 9366,
-  profileDir: `${process.env.TEMP}\\pjs-face-profile`,
+  profileDir: tmpProfile('pjs-face-profile'),
   extraArgs: ['--use-fake-device-for-media-stream', '--use-fake-ui-for-media-stream'],
   startupTimeoutMs: 30000,
 });

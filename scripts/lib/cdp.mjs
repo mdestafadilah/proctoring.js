@@ -1,5 +1,5 @@
 /**
- * Minimal Edge-over-CDP driver for Windows — no npm dependencies.
+ * Minimal Chromium-over-CDP driver for Windows and Linux — no npm dependencies.
  *
  * VENDORED COPY. This is a pinned copy of the driver from the
  * `windows-edge-cdp-ui-verify` agent skill, kept inside the repo so the
@@ -12,8 +12,8 @@
  * `agent-browser` does not support Windows).
  *
  * Usage:
- *   import { launchEdge } from "./lib/cdp.mjs";
- *   const page = await launchEdge({ port: 9333, profileDir: `${process.env.TEMP}\\my-profile` });
+ *   import { launchEdge, tmpProfile } from "./lib/cdp.mjs";
+ *   const page = await launchEdge({ port: 9333, profileDir: tmpProfile("my-profile") });
  *   try {
  *     await page.goto("/login");
  *     await page.setValue('input[placeholder="mis. sari"]', "sari");
@@ -25,17 +25,101 @@
  *   }
  *
  * Key environment notes:
- * - `profileDir` MUST live outside the project directory.
+ * - The browser is found automatically: Edge on Windows, Edge/Chrome/Chromium on
+ *   Linux. Override it with `EDGE_PATH` — see `.env.example`.
+ * - `profileDir` MUST live outside the project directory; `tmpProfile()` gives a
+ *   portable one.
  * - Proxy env vars are stripped here, otherwise localhost hits the proxy.
  * - `close()` must run even on failure.
  */
 import fs from "fs";
+import os from "os";
+import { join } from "path";
 
-const DEFAULT_EDGE_PATHS = [  "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe",
+/**
+ * Candidate browser executables, most likely first.
+ *
+ * Windows is the primary target — Edge ships with the OS — but the suites are
+ * expected to run on Linux too, where Edge is rare and Chrome or Chromium is
+ * what you actually have. CDP is identical across Chromium browsers, so any of
+ * them works and only the path differs. Missing entries are simply skipped, so
+ * covering three platforms costs nothing on any one of them.
+ */
+export const DEFAULT_EDGE_PATHS = [
+  // Windows
+  "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe",
   "C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe",
+  // Linux
+  "/usr/bin/microsoft-edge",
+  "/usr/bin/microsoft-edge-stable",
+  "/usr/bin/google-chrome",
+  "/usr/bin/google-chrome-stable",
+  "/usr/bin/chromium",
+  "/usr/bin/chromium-browser",
+  "/snap/bin/chromium",
+  // macOS
+  "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
+  "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
 ];
 
 const sleep = (ms) => Bun.sleep(ms);
+
+/** `existsSync` that treats an unreadable path as a miss rather than a throw. */
+function exists(path) {
+  try {
+    return fs.existsSync(path);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * A browser profile directory inside the OS temp dir.
+ *
+ * Callers used to build this from `process.env.TEMP`, which does not exist on
+ * Linux. There the template string produced the literal `undefined\pjs-profile`
+ * — a *relative* path — so the profile landed inside the repo, where Vite
+ * watches its thousands of files and reloads the page in the middle of a check.
+ */
+export function tmpProfile(name) {
+  return join(os.tmpdir(), name);
+}
+
+/**
+ * Resolve the browser executable.
+ *
+ * Precedence: an explicit `edgePath` argument, then `EDGE_PATH`, then the
+ * built-in candidates. A path that is *set but wrong* is an error rather than a
+ * silent fallback: otherwise a typo in `.env` would quietly run a different
+ * browser than the one you asked for, and every check would still look green.
+ */
+export function resolveBrowserPath({ edgePath } = {}) {
+  const explicit = typeof edgePath === "string" ? edgePath.trim() : "";
+  if (explicit) {
+    if (!exists(explicit)) throw new Error(`edgePath points at nothing: ${explicit}`);
+    return explicit;
+  }
+
+  const fromEnv = (process.env.EDGE_PATH ?? "").trim();
+  if (fromEnv) {
+    if (!exists(fromEnv)) {
+      throw new Error(
+        `EDGE_PATH points at nothing: ${fromEnv}\n` +
+          "  Fix it in .env, or unset it to fall back to the built-in candidates.",
+      );
+    }
+    return fromEnv;
+  }
+
+  const found = DEFAULT_EDGE_PATHS.find((path) => exists(path));
+  if (found) return found;
+
+  throw new Error(
+    "No Chromium-based browser found.\n" +
+      "  Set EDGE_PATH in .env (see .env.example), or install one of:\n" +
+      DEFAULT_EDGE_PATHS.map((path) => `    ${path}`).join("\n"),
+  );
+}
 
 export async function launchEdge({
   port = 9333,
@@ -46,7 +130,9 @@ export async function launchEdge({
   startupTimeoutMs = 20000,
   extraArgs = [],
 } = {}) {
-  if (!profileDir) throw new Error("launchEdge: profileDir wajib diisi");
+  if (!profileDir) {
+    throw new Error("launchEdge: profileDir wajib diisi — pakai tmpProfile('nama')");
+  }
 
   // Jangan biarkan permintaan ke 127.0.0.1 lewat proxy lingkungan.
   delete process.env.HTTP_PROXY;
@@ -64,8 +150,7 @@ export async function launchEdge({
     );
   }
 
-  const exe = edgePath ?? DEFAULT_EDGE_PATHS.find((path) => fs.existsSync(path));
-  if (!exe) throw new Error("Edge tidak ditemukan — sebutkan path-nya lewat edgePath");
+  const exe = resolveBrowserPath({ edgePath });
 
   const proc = Bun.spawn(
     [

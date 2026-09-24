@@ -924,12 +924,12 @@ npm run build            # emits dist/proctoring.js, .cjs, .umd.js + index.d.ts
 npm test                 # build + 163 checks against the built artifact
 ```
 
-Five suites, 253 checks in total:
+Five suites, 260 checks in total:
 
 | Command | Checks | What it proves |
 |---|---|---|
 | `npm run verify` | 163 | Build output, exports, report math, screenshot helpers, webhook payload shape, and the decision logic of every detector including clipboard, tab-close and snapshot routing |
-| `npm run verify:browser` | 65 | Real Edge: tab switch, right-click, keyboard shortcuts, camera stream, audio sampler, device scan, live-camera-track match, real copy/cut/paste, tab-closed beaconing (body read off the blob), webcam and page snapshots, `getDisplayMedia` wrap/restore, teardown, screenshots |
+| `npm run verify:browser` | 72 | Real Edge: tab switch, right-click, keyboard shortcuts, camera stream, audio sampler, device scan, live-camera-track match, real copy/cut/paste, tab-closed beaconing (body read off the blob), webcam and page snapshots, browser discovery (`EDGE_PATH` precedence and failures), `getDisplayMedia` wrap/restore, teardown, screenshots |
 | `npm run verify:umd` | 6 | The `<script src>` path via a plain static server |
 | `npm run verify:face` | 7 | face-api CDN + weights resolve and inference runs |
 | `npm run verify:static` | 12 | The deployed demo shape: one HTML file + the published CDN bundle |
@@ -962,9 +962,24 @@ audio checks run with no physical hardware and no permission prompt.
 
 The CDP driver is vendored at [`scripts/lib/cdp.mjs`](./scripts/lib/cdp.mjs) — a
 dependency-free copy, so the suites run on any clone without installing a
-browser-automation stack. It is Windows-only: it looks for `msedge.exe` in the
-two standard install locations and speaks DevTools Protocol over a WebSocket.
-Set `edgePath` if Edge lives elsewhere.
+browser-automation stack. It speaks DevTools Protocol over a WebSocket, which is
+the same on every Chromium browser, so the only platform-specific part is finding
+the executable. It probes a built-in list — Edge in both Windows `Program Files`
+locations, `microsoft-edge` / `google-chrome` / `chromium` under `/usr/bin` and
+`/snap/bin` on Linux, and the macOS app bundles — and takes the first that
+exists. Missing entries are skipped, so one list covers all three platforms.
+
+Set `EDGE_PATH` when the browser lives somewhere else (a portable install, a
+version manager, a non-standard prefix):
+
+```bash
+EDGE_PATH=/opt/google/chrome/chrome npm run verify:browser
+```
+
+A path that is set but wrong **stops the run and names it**, rather than falling
+back to a different browser. A silent fallback would test something other than
+what you configured, and every check would still pass — the one failure mode that
+looks exactly like success.
 
 The release version is read from `package.json` by
 [`scripts/lib/pkg.mjs`](./scripts/lib/pkg.mjs), so bumping the version is a
@@ -1040,6 +1055,7 @@ cp .env.example .env
 |---|---|---|
 | `NETLIFY_AUTH_TOKEN` | `npm run deploy:demo` | the token `netlify login` saved to `%APPDATA%/netlify/Config/config.json` |
 | `DEMO_URL` | `npm run verify:static` | verifies the local `netlify-demo/` folder instead of the live site |
+| `EDGE_PATH` | `verify:browser`, `verify:umd`, `verify:face`, `verify:static` | a built-in candidate list covering Windows, Linux and macOS |
 | `PYTHON` | `verify:umd`, `verify:static` | `python` on `PATH` — set it if that is a Windows Store shim |
 | `NODE_AUTH_TOKEN`, `NPM_TOKEN` | `node scripts/check-npm-auth.mjs` | `_authToken` in `~/.npmrc` |
 
