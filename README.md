@@ -730,6 +730,11 @@ The candidate picks the surface, so `displaySurface: 'browser'` is a hint about
 what to ask for, not a guarantee of what they choose. Capture also ends by itself
 when they press "Stop sharing" in the browser's own UI.
 
+It must also come **after `start()`**. A capture started on a session that is not
+running would open a share, tick on schedule and silently produce nothing, so
+`startPageCapture()` rejects with an error instead. `stop()` and `destroy()` both
+release the surface, whatever state the session is in.
+
 > **Watch out:** with `thirdParty.detectScreenShare` on, your own page capture is
 > reported as `screen-share-started`. That is correct — the page really is sharing
 > its screen — but it means the two features flag each other. Filter out the
@@ -903,14 +908,14 @@ not as proof.
 npm install
 npm run dev              # demo page at http://localhost:5173/demo.html
 npm run build            # emits dist/proctoring.js, .cjs, .umd.js + index.d.ts
-npm test                 # build + 157 checks against the built artifact
+npm test                 # build + 159 checks against the built artifact
 ```
 
-Five suites, 246 checks in total:
+Five suites, 248 checks in total:
 
 | Command | Checks | What it proves |
 |---|---|---|
-| `npm run verify` | 157 | Build output, exports, report math, screenshot helpers, and the decision logic of every detector including clipboard, tab-close and snapshot routing |
+| `npm run verify` | 159 | Build output, exports, report math, screenshot helpers, and the decision logic of every detector including clipboard, tab-close and snapshot routing |
 | `npm run verify:browser` | 64 | Real Edge: tab switch, right-click, keyboard shortcuts, camera stream, audio sampler, device scan, live-camera-track match, real copy/cut/paste, tab-closed beaconing, webcam and page snapshots, `getDisplayMedia` wrap/restore, teardown, screenshots |
 | `npm run verify:umd` | 6 | The `<script src>` path via a plain static server |
 | `npm run verify:face` | 7 | face-api CDN + weights resolve and inference runs |

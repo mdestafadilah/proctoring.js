@@ -339,7 +339,8 @@ export declare class Proctor {
 
   /**
    * Start periodic stills of a screen the candidate shares. Must be called from
-   * a user gesture. Rejects when pageCapture.enabled is false.
+   * a user gesture and after start(). Rejects when pageCapture.enabled is false
+   * or the session is not running.
    */
   startPageCapture(): Promise<MediaStream>;
   /** Stop page capture and release the shared surface. Safe when idle. */

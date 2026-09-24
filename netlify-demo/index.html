@@ -193,6 +193,7 @@
           <button id="btnStop" disabled>Stop</button>
           <button id="btnCsv" disabled>Unduh CSV</button>
           <button id="btnClear" disabled>Bersihkan</button>
+          <button id="btnShare" disabled title="Butuh klik: browser hanya mengizinkan tangkapan layar dari gesture pengguna">Bagikan layar</button>
         </div>
         <div class="controls">
           <label class="toggle"><input type="checkbox" id="optTabs" checked /> tabs</label>
@@ -352,6 +353,9 @@
             // Deteksi perangkat lunak pihak ketiga (kamera virtual, kabel audio
             // loopback, screen share dari halaman ini).
             thirdParty: { enabled: $('optThirdParty').checked },
+            // Hanya pernah dimulai oleh tombol "Bagikan layar": browser
+            // membatasi tangkapan layar pada gesture pengguna.
+            pageCapture: { enabled: true, intervalMs: 10000 },
             report: {
               captureScreenshots: $('optShots').checked,
               screenshotMaxWidth: 320,
@@ -366,6 +370,10 @@
           proctor.on('detector:error', function (e) {
             log('detector "' + e.detector + '" gagal: ' + e.error.message, 'critical');
           });
+          // Snapshot adalah sampel, bukan pelanggaran, jadi dapat barisnya sendiri.
+          proctor.on('snapshot', function (s) {
+            log('snapshot [' + s.source + '] ' + s.width + 'x' + s.height + ', ' + s.bytes + ' byte');
+          });
 
           $('btnStart').disabled = true;
           statusEl.className = 'status';
@@ -377,6 +385,7 @@
             $('btnStop').disabled = false;
             $('btnCsv').disabled = false;
             $('btnClear').disabled = false;
+            $('btnShare').disabled = false;
             refreshStats();
             startPolling();
           }).catch(function (err) {
@@ -402,10 +411,28 @@
           statusEl.style.color = '';
           $('btnStart').disabled = false;
           $('btnStop').disabled = true;
+          $('btnShare').disabled = true;
+          $('btnShare').textContent = 'Bagikan layar';
         }
 
         $('btnStart').addEventListener('click', start);
         $('btnStop').addEventListener('click', stop);
+
+        // Klik sungguhan: `getDisplayMedia` hanya jalan dari gesture pengguna.
+        $('btnShare').addEventListener('click', function () {
+          if (!proctor) return;
+          if (proctor.isPageCapturing()) {
+            proctor.stopPageCapture();
+            $('btnShare').textContent = 'Bagikan layar';
+            return;
+          }
+          proctor.startPageCapture().then(function () {
+            $('btnShare').textContent = 'Stop berbagi';
+            log('tangkapan halaman mulai — snapshot tiap 10 detik');
+          }).catch(function (err) {
+            log('tangkapan halaman tidak dimulai: ' + err.message, 'critical');
+          });
+        });
 
         $('btnClear').addEventListener('click', function () {
           if (proctor) proctor.clearViolations();

@@ -106,6 +106,15 @@ export class Proctor {
 
   /** Stop all detectors and return the final report. */
   stop() {
+    /**
+     * Capture teardown happens before the early return. A page capture can be
+     * running on a session that never reached `start()` (or that `start()`
+     * failed on), and leaving a shared screen live is a leak the host cannot
+     * see from the outside.
+     */
+    this._stopSnapshots();
+    this.stopPageCapture();
+
     if (!this.started) return this.getReport();
 
     for (const [name, detector] of this.detectors) {
@@ -116,9 +125,6 @@ export class Proctor {
       }
     }
     this.detectors.clear();
-
-    this._stopSnapshots();
-    this.stopPageCapture();
 
     this.started = false;
     this.store.markStopped();
@@ -216,6 +222,12 @@ export class Proctor {
    */
   async startPageCapture() {
     if (this.destroyed) throw new Error('proctoring.js: session was destroyed');
+    /**
+     * Refused rather than started-and-ignored: `_takeSnapshot()` returns null
+     * while the session is not running, so a capture started here would open a
+     * screen share, tick on schedule and silently produce nothing.
+     */
+    if (!this.started) throw new Error('proctoring.js: start the session before capturing the page');
     if (!this.options.pageCapture.enabled) {
       throw new Error('proctoring.js: pageCapture.enabled is false');
     }

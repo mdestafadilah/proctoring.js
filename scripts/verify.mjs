@@ -2006,14 +2006,47 @@ await checkAsync('with no backend configured, no snapshot request is made', asyn
   });
 });
 
+await checkAsync('startPageCapture() refuses before the session is running', async () => {
+  const proctor = new Proctor({ tabs: { enabled: false }, pageCapture: { enabled: true } });
+  // Starting it here would open a share, tick on schedule, and silently produce
+  // nothing — `_takeSnapshot()` returns null while the session is not running.
+  await assert.rejects(
+    () => proctor.startPageCapture(),
+    /start the session before capturing the page/
+  );
+});
+
 await checkAsync('startPageCapture() refuses when pageCapture is disabled', async () => {
   const proctor = new Proctor({ tabs: { enabled: false } });
+  proctor.started = true;
   await assert.rejects(() => proctor.startPageCapture(), /pageCapture\.enabled is false/);
 });
 
 check('stopPageCapture() is safe when nothing is running', () => {
   const proctor = new Proctor({ tabs: { enabled: false } });
   proctor.stopPageCapture();
+  assert.equal(proctor.isPageCapturing(), false);
+});
+
+check('stop() releases a page capture even when the session never started', () => {
+  const proctor = new Proctor({ tabs: { enabled: false } });
+
+  const released = [];
+  proctor._pageCapture = {
+    stream: { getTracks: () => [{ stop: () => released.push('track') }] },
+    video: { srcObject: {}, remove: () => released.push('video') },
+    track: null,
+    onEnded: () => {},
+  };
+
+  assert.equal(proctor.started, false);
+  proctor.stop();
+
+  assert.deepEqual(
+    released,
+    ['track', 'video'],
+    'a shared screen must not outlive stop(), whatever the session state'
+  );
   assert.equal(proctor.isPageCapturing(), false);
 });
 
