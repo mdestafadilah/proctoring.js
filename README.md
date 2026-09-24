@@ -550,6 +550,37 @@ config the browser then disproved.
 > an `import` into the UMD wrapper. The same applies if you test the bundle by
 > hand — serve it as a plain static file.
 
+### Environment variables
+
+**None are required.** Every one has a working fallback, and `npm test` plus all
+four `verify:*` suites run with nothing set. Copy [`.env.example`](./.env.example)
+to `.env` if you want to override any of them:
+
+```bash
+cp .env.example .env
+```
+
+| Variable | Used by | Fallback when unset |
+|---|---|---|
+| `NETLIFY_AUTH_TOKEN` | `npm run deploy:demo` | the token `netlify login` saved to `%APPDATA%/netlify/Config/config.json` |
+| `DEMO_URL` | `npm run verify:static` | verifies the local `netlify-demo/` folder instead of the live site |
+| `PYTHON` | `verify:umd`, `verify:static` | `python` on `PATH` — set it if that is a Windows Store shim |
+| `NODE_AUTH_TOKEN`, `NPM_TOKEN` | `node scripts/check-npm-auth.mjs` | `_authToken` in `~/.npmrc` |
+
+Two details worth knowing:
+
+- **The library itself reads no environment variables.** It is a browser package;
+  `backend.endpoint` and every detector option are passed to the `Proctor`
+  constructor at runtime.
+- **Loading is uniform.** Bun loads `.env` on its own (so the `verify:*` suites
+  already see it); the two scripts run with plain `node` import
+  `scripts/load-env.mjs`, which calls `process.loadEnvFile`. The real environment
+  always wins over `.env`, under both runtimes, so a one-off
+  `DEMO_URL=… npm run verify:static` still overrides the file.
+
+`.env` is gitignored and excluded from the npm tarball. `.env.example` is
+committed — never put a real secret in it.
+
 ## License
 
 MIT

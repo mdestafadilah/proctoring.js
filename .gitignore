@@ -29,10 +29,13 @@ dist-ssr
 *.sln
 *.sw?
 
-# Env files — `env.example` documents the expected keys
+# Env files. `.env.example` documents every variable the scripts read and IS
+# committed — the negation below keeps it tracked even if the patterns above are
+# ever broadened to `.env*`.
 .env
 .env.local
 .env.*.local
+!.env.example
 
 # Agent working state (local memory, scratch output). Not part of the package.
 .workbuddy-ai/

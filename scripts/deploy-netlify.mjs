@@ -12,9 +12,12 @@
  *   node scripts/deploy-netlify.mjs <folder> [site-name]
  *
  * Requires a Netlify token, read from (in order):
- *   1. NETLIFY_AUTH_TOKEN
+ *   1. NETLIFY_AUTH_TOKEN (from the environment, or from .env)
  *   2. the token saved by `netlify login` in the user's config.json
+ *
+ * See .env.example for every variable the repo's scripts understand.
  */
+import './load-env.mjs';
 import { readFileSync, readdirSync, statSync, existsSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { join, relative, sep, posix } from 'node:path';

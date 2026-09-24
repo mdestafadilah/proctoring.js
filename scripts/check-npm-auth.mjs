@@ -9,7 +9,11 @@
  *
  * It never prints the token value, and it never writes to the registry — the
  * read-only probes below are enough to tell a read-only token from a broken one.
+ *
+ * Token sources, in the order npm resolves them: NODE_AUTH_TOKEN / NPM_TOKEN
+ * (environment or .env), then `_authToken` in ~/.npmrc.
  */
+import './load-env.mjs';
 import { readFileSync, existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
