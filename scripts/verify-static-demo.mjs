@@ -13,6 +13,7 @@
  */
 import { launchEdge, tmpProfile } from './lib/cdp.mjs';
 import { version } from './lib/pkg.mjs';
+import { EXPECTED_DETECTORS } from './lib/expected-detectors.mjs';
 import { strict as assert } from 'node:assert';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
@@ -98,7 +99,7 @@ try {
   assert.equal(load.hasGlobal, true, 'window.Proctoring must be defined');
   assert.equal(load.version, version, `unexpected version: ${load.version}`);
   assert.equal(load.badge, `v${version}`);
-  assert.deepEqual(load.detectors, ['tabs', 'rightClick', 'shortcuts', 'camera', 'face', 'audio']);
+  assert.deepEqual(load.detectors, [...EXPECTED_DETECTORS]);
   ok(`UMD dari jsDelivr dimuat (window.Proctoring v${load.version})`);
 
   assert.equal(load.cdnScript.length, 1, 'the demo must load exactly one CDN script');

@@ -17,6 +17,7 @@
  */
 import { launchEdge, tmpProfile } from './lib/cdp.mjs';
 import { version } from './lib/pkg.mjs';
+import { EXPECTED_DETECTORS } from './lib/expected-detectors.mjs';
 import { strict as assert } from 'node:assert';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
@@ -57,7 +58,7 @@ try {
   ok(`global is named "Proctoring" and exposes version ${result.version}`);
 
   assert.equal(result.hasProctor, true, 'Proctor class must be on the global');
-  assert.deepEqual(result.detectors, ['tabs', 'rightClick', 'shortcuts', 'clipboard', 'camera', 'face', 'audio', 'thirdParty']);
+  assert.deepEqual(result.detectors, [...EXPECTED_DETECTORS]);
   ok('Proctor class and every detector are reachable');
 
   assert.equal(result.eventSample, 'violation');

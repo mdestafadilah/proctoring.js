@@ -89,9 +89,15 @@ if (whoami.status === 401) {
 }
 console.log(`OK    Token hidup — login sebagai ${JSON.parse(whoami.body).username}`);
 
-// 2. Does it have account-level write access?
-//    `/-/npm/v1/user` requires a session or a token with write privileges, so a
-//    403 here is the earliest reliable signal that the token is read-only.
+// 2. Can it read account-level info?
+//
+//    This endpoint requires account-wide privileges, so a 403 here is *not*
+//    evidence that the token is read-only. A granular token scoped to one package
+//    gets 403 here while still being perfectly able to publish — verified the hard
+//    way on 2026-09-24, when this check reported "READ-ONLY" and `npm publish`
+//    then succeeded. Only a 401 (handled above) is a real failure signal. There is
+//    no non-destructive probe for publish rights: the definitive test is the
+//    publish itself, and a failed publish has no side effects.
 const user = await probe('user', `${REGISTRY}/-/npm/v1/user`, token);
 
 if (user.status === 200) {
@@ -101,24 +107,23 @@ if (user.status === 200) {
   } catch {
     /* shape may differ; not important */
   }
-  console.log(`OK    Token punya hak tulis (2FA akun: ${tfa})`);
-  console.log('');
-  console.log('Token ini seharusnya bisa publish. Coba lagi:');
-  console.log('  npm publish');
+  console.log(`OK    Token punya akses akun penuh (2FA akun: ${tfa})`);
 } else if (user.status === 403) {
-  console.log('FAIL  Token READ-ONLY — inilah penyebab E403 saat publish.');
-  console.log('');
-  console.log('Perbaiki dengan membuat token baru:');
-  console.log('  1. Buka https://www.npmjs.com/settings/~tokens');
-  console.log('  2. "Generate New Token" -> "Granular Access Token"');
-  console.log('  3. Permissions      : pilih "Read and write"');
-  console.log(`  4. Packages         : "All packages" (atau sertakan ${PACKAGE_NAME})`);
-  console.log('  5. Bypass 2FA       : centang (kalau akun pakai 2FA)');
-  console.log('  6. Salin token, lalu:');
-  console.log('       npm config set //registry.npmjs.org/:_authToken=<token-baru>');
-  console.log('       node scripts/check-npm-auth.mjs   # harus lolos sebelum publish');
-  process.exit(1);
+  console.log('INFO  Token tidak bisa membaca info akun (403).');
+  console.log('      Ini NORMAL untuk granular token yang dibatasi ke satu paket,');
+  console.log('      dan BUKAN bukti token read-only. Lanjutkan saja ke `npm publish`.');
 } else {
-  console.log(`WARN  Pemeriksaan hak tulis mengembalikan HTTP ${user.status}.`);
+  console.log(`WARN  Pemeriksaan akses akun mengembalikan HTTP ${user.status}.`);
   console.log(`      ${user.body.slice(0, 160)}`);
 }
+
+console.log('');
+console.log('Tidak ada cara memeriksa hak tulis tanpa mencoba publish. Kalau publish');
+console.log('gagal dengan E403, baru buat token baru:');
+console.log('  1. Buka https://www.npmjs.com/settings/~tokens');
+console.log('  2. "Generate New Token" -> "Granular Access Token"');
+console.log('  3. Permissions      : pilih "Read and write"');
+console.log(`  4. Packages         : "All packages" (atau sertakan ${PACKAGE_NAME})`);
+console.log('  5. Bypass 2FA       : centang (kalau akun pakai 2FA)');
+console.log('  6. Salin token, lalu:');
+console.log('       npm config set //registry.npmjs.org/:_authToken=<token-baru>');

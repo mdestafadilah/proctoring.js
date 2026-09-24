@@ -9,6 +9,7 @@
  */
 import { launchEdge, tmpProfile, resolveBrowserPath, DEFAULT_EDGE_PATHS } from './lib/cdp.mjs';
 import { version } from './lib/pkg.mjs';
+import { EXPECTED_DETECTORS } from './lib/expected-detectors.mjs';
 import { strict as assert } from 'node:assert';
 import { existsSync, mkdirSync } from 'node:fs';
 import { dirname, isAbsolute, resolve } from 'node:path';
@@ -65,7 +66,7 @@ try {
   })()`);
 
   assert.equal(api.hasProctor, true, 'Proctor must be exported');
-  assert.deepEqual(api.detectors, ['tabs', 'rightClick', 'shortcuts', 'clipboard', 'camera', 'face', 'audio', 'thirdParty']);
+  assert.deepEqual(api.detectors, [...EXPECTED_DETECTORS]);
   assert.equal(api.version, version);
   assert.ok(api.modelUrl.startsWith('https://cdn.jsdelivr.net/'), 'model URL must be a CDN URL');
   ok(`module loads in browser (${api.keys.length} exports, v${api.version})`);

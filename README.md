@@ -1035,7 +1035,7 @@ webcam source, and a genuine `getDisplayMedia` surface for the page source.
 | Path | What it is |
 |---|---|
 | `src/` | Library source. `core/` holds the orchestrator; `detectors/` is the registry, where a new feature is one file plus one entry. |
-| `scripts/` | The verification suites and the Netlify deploy helper. Not published. |
+| `scripts/` | The verification suites and the Netlify deploy helper. Not published. `lib/expected-detectors.mjs` is the single source for the detector-name list that all four suites assert against — keep it in sync when adding a detector. |
 | `netlify-demo/` | The static demo site, hosted separately at `proctoring-js-demo.netlify.app`. |
 | `demo.html` | The richer demo page served by `npm run dev`. |
 | `models/` | Local face-api weights for the `module` and `custom` providers (~18 MB). Tracked for convenience, excluded from the tarball. |

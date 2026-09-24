@@ -9,6 +9,7 @@
  *   node scripts/verify.mjs
  */
 import { pkg } from './lib/pkg.mjs';
+import { EXPECTED_DETECTORS } from './lib/expected-detectors.mjs';
 import { strict as assert } from 'node:assert';
 import { createRequire } from 'node:module';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -88,10 +89,7 @@ check('createProctor is a factory', () => assert.equal(typeof createProctor, 'fu
 check('default export is Proctor', () => assert.equal(esm.default, Proctor));
 check('version matches package.json', () => assert.equal(version, pkg.version));
 check('every detector is registered', () =>
-  assert.deepEqual(
-    [...DETECTOR_NAMES],
-    ['tabs', 'rightClick', 'shortcuts', 'clipboard', 'camera', 'face', 'audio', 'thirdParty']
-  ));
+  assert.deepEqual([...DETECTOR_NAMES], [...EXPECTED_DETECTORS]));
 check('the registry maps names to classes', () =>
   assert.equal(esm.DETECTORS.shortcuts, ShortcutsDetector));
 check('event names are stable', () => {
@@ -131,10 +129,7 @@ const cjs = require(resolve(dist, 'proctoring.cjs'));
 check('require() returns the namespace', () => assert.equal(typeof cjs.Proctor, 'function'));
 check('named exports survive CJS', () => {
   assert.equal(cjs.EVENTS.VIOLATION, 'violation');
-  assert.deepEqual(
-    [...cjs.DETECTOR_NAMES],
-    ['tabs', 'rightClick', 'shortcuts', 'clipboard', 'camera', 'face', 'audio', 'thirdParty']
-  );
+  assert.deepEqual([...cjs.DETECTOR_NAMES], [...EXPECTED_DETECTORS]);
 });
 check('CommonJS and ESM expose identical keys', () => {
   const esmKeys = Object.keys(esm).filter((k) => k !== 'default').sort();
