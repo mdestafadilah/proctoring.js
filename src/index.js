@@ -68,4 +68,4 @@ export {
 
 export { isBrowser, isSecureContext, mergeOptions, throttle, every, uid, clamp } from './core/utils.js';
 
-export const version = '0.5.0';
+export const version = '0.5.1';
