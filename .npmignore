@@ -1,0 +1,29 @@
+# proctoring.js — files excluded from the npm package.
+#
+# The published tarball should contain `dist/`, `README.md`, and `LICENSE` only
+# (see the `files` field in package.json). This file keeps the pack clean even
+# if `files` is ever loosened.
+
+# Local face-api weights — ~18MB, superseded by the CDN provider
+models/
+
+# Source is published through `dist` only; keep the tarball small
+src/
+vite.config.js
+demo.html
+
+# Static demo site and its tooling — hosted separately, not part of the package
+netlify-demo/
+scripts/
+
+# Tooling and CI
+.github/
+.vscode/
+.idea/
+*.log
+.env
+.env.*
+
+# OS noise
+.DS_Store
+Thumbs.db

@@ -1,23 +1,72 @@
 {
   "name": "proctoring.js",
-  "private": true,
-  "version": "0.0.0",
+  "version": "0.1.0",
+  "description": "Zero-dependency browser proctoring toolkit: tab-switch, camera, face and audio monitoring with a single event API.",
   "type": "module",
+  "license": "MIT",
+  "author": "mdestafadilah <desta.08b@gmail.com>",
+  "homepage": "https://github.com/mdestafadilah/proctoring.js-catalyst#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/mdestafadilah/proctoring.js-catalyst.git"
+  },
+  "bugs": {
+    "url": "https://github.com/mdestafadilah/proctoring.js-catalyst/issues"
+  },
+  "keywords": [
+    "proctoring",
+    "exam",
+    "invigilation",
+    "tab-switch",
+    "visibility",
+    "camera",
+    "webcam",
+    "face-detection",
+    "face-api",
+    "audio",
+    "noise-detection",
+    "anti-cheat",
+    "browser",
+    "zero-dependency"
+  ],
+  "sideEffects": false,
+  "main": "./dist/proctoring.cjs",
+  "module": "./dist/proctoring.js",
+  "unpkg": "./dist/proctoring.umd.js",
+  "jsdelivr": "./dist/proctoring.umd.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/proctoring.js",
+      "require": "./dist/proctoring.cjs",
+      "default": "./dist/proctoring.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "verify": "node scripts/verify.mjs",
+    "verify:browser": "bun scripts/verify-browser.mjs",
+    "verify:umd": "bun scripts/verify-umd.mjs",
+    "verify:face": "bun scripts/verify-face.mjs",
+    "verify:static": "bun scripts/verify-static-demo.mjs",
+    "verify:all": "npm run verify && npm run verify:browser && npm run verify:umd && npm run verify:face",
+    "deploy:demo": "node scripts/deploy-netlify.mjs netlify-demo proctoring-js-demo",
+    "test": "npm run build && npm run verify",
+    "prepublishOnly": "npm test"
   },
   "devDependencies": {
-    "vite": "^5.2.0"
-  },
-  "dependencies": {
-    "@tensorflow/tfjs": "^4.17.0",
-    "@vladmandic/face-api": "^1.7.13",
-    "axios": "^1.6.8",
-    "canvas": "^2.11.2",
-    "fs": "^0.0.1-security",
-    "path": "^0.12.7",
-    "whistle-detection": "^1.0.3"
+    "vite": "^5.4.0"
   }
 }

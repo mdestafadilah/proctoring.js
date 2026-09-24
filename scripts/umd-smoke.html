@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>UMD smoke test</title>
+  </head>
+  <body>
+    <!-- No module scripts: proves the UMD bundle works from a plain script tag,
+         which is how jsDelivr/unpkg consumers load it. -->
+    <script src="/dist/proctoring.umd.js"></script>
+    <script>
+      window.__umd = (function () {
+        if (typeof window.Proctoring === 'undefined') {
+          return { ok: false, reason: 'window.Proctoring is undefined' };
+        }
+        const { Proctor, EVENTS, VIOLATION_TYPES, formatDuration, DETECTOR_NAMES, version } =
+          window.Proctoring;
+
+        return {
+          ok: true,
+          version,
+          globalName: 'Proctoring',
+          keyCount: Object.keys(window.Proctoring).length,
+          hasProctor: typeof Proctor === 'function',
+          detectors: [...DETECTOR_NAMES],
+          eventSample: EVENTS.VIOLATION,
+          typeSample: VIOLATION_TYPES.TAB_HIDDEN,
+          durationSample: formatDuration(3661000),
+        };
+      })();
+    </script>
+  </body>
+</html>
