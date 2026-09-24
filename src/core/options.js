@@ -33,6 +33,7 @@ export const VIOLATION_TYPES = Object.freeze({
   TAB_HIDDEN: 'tab-hidden',
   WINDOW_BLUR: 'window-blur',
   RIGHT_CLICK: 'right-click',
+  SHORTCUT_USED: 'shortcut-used',
   CAMERA_DISABLED: 'camera-disabled',
   CAMERA_MUTED: 'camera-muted',
   CAMERA_DENIED: 'camera-denied',
@@ -65,6 +66,7 @@ export const DEFAULT_SEVERITY = Object.freeze({
   [VIOLATION_TYPES.TAB_HIDDEN]: SEVERITY.HIGH,
   [VIOLATION_TYPES.WINDOW_BLUR]: SEVERITY.MEDIUM,
   [VIOLATION_TYPES.RIGHT_CLICK]: SEVERITY.MEDIUM,
+  [VIOLATION_TYPES.SHORTCUT_USED]: SEVERITY.HIGH,
   [VIOLATION_TYPES.CAMERA_DISABLED]: SEVERITY.CRITICAL,
   [VIOLATION_TYPES.CAMERA_MUTED]: SEVERITY.HIGH,
   [VIOLATION_TYPES.CAMERA_DENIED]: SEVERITY.CRITICAL,
@@ -136,6 +138,32 @@ export const DEFAULT_OPTIONS = {
     throttleMs: 500,
     /** Record tag/id/classes of the element that was right-clicked. */
     captureTarget: true,
+  },
+
+  /**
+   * Emit `violation` for keyboard shortcuts — by default the developer-tools and
+   * view-source combinations. No permissions needed.
+   *
+   * Off by default for the same reason as `rightClick`: these keys are ordinary
+   * in most pages, and only the host knows whether they are suspicious.
+   */
+  shortcuts: {
+    enabled: false,
+    /**
+     * Combos to watch, e.g. `['ctrl+shift+i', 'ctrl+p']`. `null` uses the
+     * platform's developer-tools list (see `DEVTOOLS_COMBOS`).
+     *
+     * Syntax: `ctrl`, `shift`, `alt`, `meta`, and `mod` (which resolves to `meta`
+     * on macOS and `ctrl` elsewhere), then one key. Matched with `event.code`
+     * *or* `event.key`, so a non-Latin layout still works.
+     */
+    combos: null,
+    /**
+     * Also call `preventDefault()`, which is the only thing that stops the
+     * browser acting on the shortcut. Opt-in, and best-effort: DevTools can still
+     * be opened from the browser menu.
+     */
+    block: false,
   },
 
   camera: {

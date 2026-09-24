@@ -125,6 +125,7 @@
         <div class="controls">
           <label class="toggle"><input type="checkbox" id="optTabs" checked /> tabs</label>
           <label class="toggle"><input type="checkbox" id="optRightClick" checked /> rightClick</label>
+          <label class="toggle"><input type="checkbox" id="optShortcuts" checked /> shortcuts</label>
           <label class="toggle"><input type="checkbox" id="optCamera" checked /> camera</label>
           <label class="toggle"><input type="checkbox" id="optFace" /> face</label>
           <label class="toggle"><input type="checkbox" id="optAudio" /> audio</label>
@@ -200,6 +201,9 @@
           tabs: { enabled: $('optTabs').checked },
           // Detect only, so the demo's own menu still works.
           rightClick: { enabled: $('optRightClick').checked, block: false },
+          // Detect only: a demo page that hijacked Ctrl+Shift+I would be
+          // hostile to anyone who wants to inspect it.
+          shortcuts: { enabled: $('optShortcuts').checked, block: false },
           camera: {
             enabled: $('optCamera').checked || $('optFace').checked,
             videoElement: '#preview',

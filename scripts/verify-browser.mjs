@@ -53,8 +53,8 @@ try {
   })()`);
 
   assert.equal(api.hasProctor, true, 'Proctor must be exported');
-  assert.deepEqual(api.detectors, ['tabs', 'rightClick', 'camera', 'face', 'audio']);
-  assert.equal(api.version, '0.2.0');
+  assert.deepEqual(api.detectors, ['tabs', 'rightClick', 'shortcuts', 'camera', 'face', 'audio']);
+  assert.equal(api.version, '0.3.0');
   assert.ok(api.modelUrl.startsWith('https://cdn.jsdelivr.net/'), 'model URL must be a CDN URL');
   ok(`module loads in browser (${api.keys.length} exports, v${api.version})`);
 
@@ -650,7 +650,220 @@ try {
   await page.evaluate('document.getElementById("pjs-probe")?.remove()');
 
   // ---------------------------------------------------------------------
-  // 9. No console noise.
+  // 9. Keyboard shortcut detector against genuine key events.
+  //    These are pushed through the browser's input pipeline with
+  //    Input.dispatchKeyEvent, which is the only way to prove the shortcut
+  //    path works: a page-scripted KeyboardEvent cannot trigger a browser
+  //    shortcut, so it cannot prove the detector sees what a user produces.
+  // ---------------------------------------------------------------------
+  console.log('\nBrowser: keyboard shortcuts');
+
+  // CDP modifier bitmask.
+  const MOD = { alt: 1, ctrl: 2, meta: 4, shift: 8 };
+
+  const setupShortcuts = (overrides) =>
+    page.evaluate(`(async () => {
+      const { Proctor } = await import('/src/index.js');
+      const proctor = new Proctor({
+        logLevel: 'silent',
+        report: { persist: false },
+        tabs: { enabled: false },
+        shortcuts: ${JSON.stringify(overrides)},
+      });
+      window.__pjsKeyEvents = [];
+      window.__pjsKeyPrevented = null;
+      proctor.on('violation', (v) => window.__pjsKeyEvents.push(v));
+      // Bubble phase, registered after the detector, so it can only observe the
+      // decision the capture-phase listener already made.
+      document.addEventListener('keydown', (e) => {
+        window.__pjsKeyPrevented = e.defaultPrevented;
+      });
+      await proctor.start();
+      window.__pjs = proctor;
+      return { combos: proctor.getDetector('shortcuts')?.getState().combos ?? [] };
+    })()`);
+
+  const teardownShortcuts = () =>
+    page.evaluate(`(() => {
+      const out = {
+        events: window.__pjsKeyEvents ?? [],
+        prevented: window.__pjsKeyPrevented,
+        state: window.__pjs?.getDetectorState('shortcuts') ?? null,
+      };
+      window.__pjs?.destroy();
+      return out;
+    })()`);
+
+  /** A genuine shortcut: rawKeyDown, no text, or the browser treats it as typing. */
+  const pressShortcut = async ({ key, code, modifiers, vk }) => {
+    await page.send('Input.dispatchKeyEvent', {
+      type: 'rawKeyDown',
+      key,
+      code,
+      modifiers,
+      windowsVirtualKeyCode: vk,
+      nativeVirtualKeyCode: vk,
+    });
+    await page.send('Input.dispatchKeyEvent', {
+      type: 'keyUp',
+      key,
+      code,
+      modifiers,
+      windowsVirtualKeyCode: vk,
+      nativeVirtualKeyCode: vk,
+    });
+    await sleep(150);
+  };
+
+  /** A genuine typed character, which does carry text. */
+  const pressCharacter = async ({ key, code, vk }) => {
+    await page.send('Input.dispatchKeyEvent', {
+      type: 'keyDown',
+      key,
+      code,
+      text: key,
+      windowsVirtualKeyCode: vk,
+      nativeVirtualKeyCode: vk,
+    });
+    await page.send('Input.dispatchKeyEvent', {
+      type: 'keyUp',
+      key,
+      code,
+      windowsVirtualKeyCode: vk,
+      nativeVirtualKeyCode: vk,
+    });
+    await sleep(150);
+  };
+
+  // (a) Synthetic first, to pin the default posture without opening DevTools.
+  const syntheticKey = await page.evaluate(`(async () => {
+    const { Proctor } = await import('/src/index.js');
+    const proctor = new Proctor({
+      logLevel: 'silent',
+      report: { persist: false },
+      tabs: { enabled: false },
+      shortcuts: { enabled: true, block: false },
+    });
+    const events = [];
+    proctor.on('violation', (v) => events.push(v));
+    await proctor.start();
+
+    // Shift uppercases key, which is the case a naive comparison misses.
+    const notPrevented = document.dispatchEvent(
+      new KeyboardEvent('keydown', {
+        key: 'I', code: 'KeyI', ctrlKey: true, shiftKey: true,
+        bubbles: true, cancelable: true,
+      })
+    );
+    await new Promise((r) => setTimeout(r, 60));
+
+    const report = proctor.getReport();
+    proctor.destroy();
+    return { events, notPrevented, report };
+  })()`);
+
+  assert.equal(syntheticKey.events.length, 1, 'a Ctrl+Shift+I keydown must be reported');
+  const shortcut = syntheticKey.events[0];
+  assert.equal(shortcut.type, 'shortcut-used');
+  assert.equal(shortcut.severity, 'high', 'a devtools shortcut should default to high severity');
+  assert.equal(shortcut.detector, 'shortcuts');
+  assert.equal(shortcut.details.combo, 'ctrl+shift+i');
+  assert.equal(shortcut.details.label, 'devtools');
+  assert.equal(shortcut.details.blocked, false);
+  ok('Ctrl+Shift+I produces a "shortcut-used" violation labelled "devtools"');
+
+  assert.equal(syntheticKey.notPrevented, true, 'block:false must leave the shortcut alone');
+  ok('block:false does not swallow the keystroke');
+
+  assert.equal(syntheticKey.report.countsByType['shortcut-used'], 1);
+  assert.equal(syntheticKey.report.worstSeverity, 'high');
+  ok(`the report aggregates shortcuts (score=${syntheticKey.report.score})`);
+
+  // (b) Genuine keys. `block: true` is deliberate: it is what stops Edge from
+  //     actually opening DevTools mid-run, and it doubles as the proof that the
+  //     capture-phase listener runs before the browser acts.
+  const shortcutAttached = await setupShortcuts({ enabled: true, block: true });
+  assert.ok(
+    shortcutAttached.combos.includes('ctrl+shift+i'),
+    `the platform default must include the devtools combo: ${JSON.stringify(shortcutAttached.combos)}`
+  );
+  ok(`the detector resolved ${shortcutAttached.combos.length} default combos for this platform`);
+
+  await pressCharacter({ key: 'i', code: 'KeyI', vk: 73 });
+  assert.equal(
+    await page.evaluate('window.__pjsKeyEvents.length'),
+    0,
+    'a plain "i" must never be reported'
+  );
+  ok('a genuine plain "i" produces no violation');
+
+  await pressShortcut({ key: 'I', code: 'KeyI', modifiers: MOD.ctrl | MOD.shift, vk: 73 });
+  const realShortcut = await teardownShortcuts();
+
+  assert.equal(
+    realShortcut.events.length,
+    1,
+    `one Ctrl+Shift+I must be one violation, got ${JSON.stringify(realShortcut.events.map((e) => e.details?.combo))}`
+  );
+  assert.equal(realShortcut.events[0].details.combo, 'ctrl+shift+i');
+  assert.equal(realShortcut.events[0].details.key, 'I', 'the raw evidence must be recorded');
+  ok('a genuine Ctrl+Shift+I is detected (key="I", the shift-uppercased form)');
+
+  assert.equal(
+    realShortcut.prevented,
+    true,
+    'block:true must preventDefault in the capture phase, before the browser opens DevTools'
+  );
+  ok('block:true suppresses the real devtools shortcut');
+
+  assert.equal(realShortcut.state?.count, 1, 'the detector must publish how many shortcuts it saw');
+  ok('the detector publishes its own state');
+
+  // (c) A custom combo, with the key only reachable through event.code: with
+  //     Shift held a US layout reports "(" while code stays Digit9.
+  const custom = await setupShortcuts({ enabled: true, block: true, combos: ['ctrl+shift+9'] });
+  assert.deepEqual(custom.combos, ['ctrl+shift+9'], 'combos must replace the defaults');
+
+  await pressShortcut({ key: 'I', code: 'KeyI', modifiers: MOD.ctrl | MOD.shift, vk: 73 });
+  assert.equal(
+    await page.evaluate('window.__pjsKeyEvents.length'),
+    0,
+    'the default devtools combo must no longer fire once combos is set'
+  );
+  ok('custom combos replace the shipped default list');
+
+  await pressShortcut({ key: '(', code: 'Digit9', modifiers: MOD.ctrl | MOD.shift, vk: 57 });
+  const digit = await teardownShortcuts();
+
+  assert.equal(
+    digit.events.length,
+    1,
+    `Ctrl+Shift+9 must match through event.code, got ${JSON.stringify(digit.events.map((e) => e.details?.code))}`
+  );
+  assert.equal(digit.events[0].details.combo, 'ctrl+shift+9');
+  assert.equal(digit.events[0].details.code, 'Digit9');
+  assert.equal(digit.events[0].details.label, null, 'an unknown combo has no label');
+  ok('a custom combo matches through event.code when the layout prints another character');
+
+  // (d) An unrelated key must still reach the page even while block is on.
+  const passthrough = await setupShortcuts({ enabled: true, block: true });
+  await pressCharacter({ key: 'a', code: 'KeyA', vk: 65 });
+
+  assert.equal(
+    await page.evaluate('window.__pjsKeyEvents.length'),
+    0,
+    'an ordinary keystroke must not be reported'
+  );
+  assert.equal(
+    await page.evaluate('window.__pjsKeyPrevented'),
+    false,
+    'block must never swallow a keystroke the host did not ask about'
+  );
+  await teardownShortcuts();
+  ok('block:true leaves unrelated keystrokes alone');
+
+  // ---------------------------------------------------------------------
+  // 10. No console noise.
   // ---------------------------------------------------------------------
   console.log('\nBrowser: console');
   const realErrors = page.errors.filter(

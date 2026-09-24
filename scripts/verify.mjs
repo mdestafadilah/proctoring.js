@@ -56,17 +56,24 @@ const {
   FaceDetector,
   AudioDetector,
   RightClickDetector,
+  ShortcutsDetector,
+  DEVTOOLS_COMBOS,
+  parseCombo,
+  detectPlatform,
   version,
 } = esm;
 
 check('Proctor is a constructor', () => assert.equal(typeof Proctor, 'function'));
 check('createProctor is a factory', () => assert.equal(typeof createProctor, 'function'));
 check('default export is Proctor', () => assert.equal(esm.default, Proctor));
-check('version matches package.json', () => assert.equal(version, '0.2.0'));
+check('version matches package.json', () => assert.equal(version, '0.3.0'));
 check('every detector is registered', () =>
-  assert.deepEqual([...DETECTOR_NAMES], ['tabs', 'rightClick', 'camera', 'face', 'audio']));
+  assert.deepEqual(
+    [...DETECTOR_NAMES],
+    ['tabs', 'rightClick', 'shortcuts', 'camera', 'face', 'audio']
+  ));
 check('the registry maps names to classes', () =>
-  assert.equal(esm.DETECTORS.rightClick, RightClickDetector));
+  assert.equal(esm.DETECTORS.shortcuts, ShortcutsDetector));
 check('event names are stable', () => {
   assert.equal(EVENTS.VIOLATION, 'violation');
   assert.equal(EVENTS.READY, 'ready');
@@ -76,10 +83,12 @@ check('violation type ids are the wire format', () => {
   assert.equal(VIOLATION_TYPES.TAB_HIDDEN, 'tab-hidden');
   assert.equal(VIOLATION_TYPES.FACE_MULTIPLE, 'face-multiple');
   assert.equal(VIOLATION_TYPES.RIGHT_CLICK, 'right-click');
+  assert.equal(VIOLATION_TYPES.SHORTCUT_USED, 'shortcut-used');
 });
 check('only tabs is enabled by default', () => {
   assert.equal(DEFAULT_OPTIONS.tabs.enabled, true);
   assert.equal(DEFAULT_OPTIONS.rightClick.enabled, false);
+  assert.equal(DEFAULT_OPTIONS.shortcuts.enabled, false);
   assert.equal(DEFAULT_OPTIONS.camera.enabled, false);
   assert.equal(DEFAULT_OPTIONS.face.enabled, false);
   assert.equal(DEFAULT_OPTIONS.audio.enabled, false);
@@ -98,7 +107,10 @@ const cjs = require(resolve(dist, 'proctoring.cjs'));
 check('require() returns the namespace', () => assert.equal(typeof cjs.Proctor, 'function'));
 check('named exports survive CJS', () => {
   assert.equal(cjs.EVENTS.VIOLATION, 'violation');
-  assert.deepEqual([...cjs.DETECTOR_NAMES], ['tabs', 'rightClick', 'camera', 'face', 'audio']);
+  assert.deepEqual(
+    [...cjs.DETECTOR_NAMES],
+    ['tabs', 'rightClick', 'shortcuts', 'camera', 'face', 'audio']
+  );
 });
 check('CommonJS and ESM expose identical keys', () => {
   const esmKeys = Object.keys(esm).filter((k) => k !== 'default').sort();
@@ -227,6 +239,8 @@ check('isVisualViolation defaults to camera and face only', () => {
   assert.equal(isVisualViolation('tab-hidden', 'tabs', null), false);
   // Neither should a right-click: a webcam frame proves nothing about a mouse.
   assert.equal(isVisualViolation('right-click', 'rightClick', null), false);
+  // Nor a keystroke.
+  assert.equal(isVisualViolation('shortcut-used', 'shortcuts', null), false);
 });
 
 check('isVisualViolation honours an explicit allow-list', () => {
@@ -710,6 +724,233 @@ check('the detector publishes a state for the host UI', () => {
 check('destroy() before init() is safe', () => {
   // Nothing was registered, so teardown must not reach for a document.
   const { detector } = makeRightClickHarness();
+  detector.destroy();
+  assert.equal(detector.getState().active, false);
+});
+
+// ---------------------------------------------------------------------------
+group('keyboard shortcut decision logic');
+
+/**
+ * Drives ShortcutsDetector with plain event objects.
+ *
+ * `init()` needs a real `document`, but `_prepareCombos()` is the same code path
+ * init uses, so the parsing rules — including the "warn and skip" behaviour for a
+ * typo — are tested here rather than reimplemented in the test.
+ */
+function makeShortcutHarness(overrides = {}) {
+  const violations = [];
+  const logs = [];
+  const states = [];
+  const config = { combos: null, block: false, ...overrides };
+  const context = {
+    options: {},
+    report: (type, details, meta) => violations.push({ type, details, ...meta }),
+    log: (level, message, meta) => logs.push({ level, message, meta }),
+    emit: () => {},
+    setState: (name, state) => states.push({ name, state }),
+  };
+  const detector = new ShortcutsDetector(config, context);
+  detector._prepareCombos(overrides.platform ?? 'other');
+  return { detector, violations, logs, states };
+}
+
+const keyEvent = (overrides = {}) => ({
+  ctrlKey: false,
+  shiftKey: false,
+  altKey: false,
+  metaKey: false,
+  repeat: false,
+  isComposing: false,
+  key: '',
+  code: '',
+  defaultPrevented: false,
+  preventDefault() {
+    this.defaultPrevented = true;
+  },
+  ...overrides,
+});
+
+/**
+ * Ctrl+Shift+I as Edge actually reports it: holding Shift uppercases `key`, which
+ * is why a naive `event.key === 'i'` comparison silently never matches.
+ */
+const ctrlShiftI = () => keyEvent({ ctrlKey: true, shiftKey: true, key: 'I', code: 'KeyI' });
+
+check('Ctrl+Shift+I produces a shortcut-used violation', () => {
+  const { detector, violations } = makeShortcutHarness();
+  detector._handleKeyDown(ctrlShiftI());
+  assert.equal(violations.length, 1);
+  assert.equal(violations[0].type, 'shortcut-used');
+  assert.equal(violations[0].detector, 'shortcuts');
+  assert.equal(violations[0].details.combo, 'ctrl+shift+i');
+  assert.equal(violations[0].details.label, 'devtools');
+});
+
+check('the shift-uppercased key still matches', () => {
+  const { detector, violations } = makeShortcutHarness();
+  // Only `key` is present — a synthetic event, or an engine that omits `code`.
+  detector._handleKeyDown(keyEvent({ ctrlKey: true, shiftKey: true, key: 'I' }));
+  assert.equal(violations.length, 1, 'the uppercase "I" must be normalised');
+});
+
+check('a non-Latin layout still matches, via event.code', () => {
+  const { detector, violations } = makeShortcutHarness();
+  // A Cyrillic layout reports a different character but the same physical key.
+  detector._handleKeyDown(keyEvent({ ctrlKey: true, shiftKey: true, key: 'Ш', code: 'KeyI' }));
+  assert.equal(violations.length, 1, 'matching on event.key alone would miss this');
+});
+
+check('the report carries the raw key evidence', () => {
+  const { detector, violations } = makeShortcutHarness();
+  detector._handleKeyDown(ctrlShiftI());
+  assert.equal(violations[0].details.key, 'I');
+  assert.equal(violations[0].details.code, 'KeyI');
+  assert.equal(violations[0].details.blocked, false);
+});
+
+check('F12 is matched too', () => {
+  const { detector, violations } = makeShortcutHarness();
+  detector._handleKeyDown(keyEvent({ key: 'F12', code: 'F12' }));
+  assert.equal(violations.length, 1);
+  assert.equal(violations[0].details.label, 'devtools');
+});
+
+check('modifier sets must match exactly', () => {
+  const { detector, violations } = makeShortcutHarness();
+  // Ctrl+I is a different shortcut, and Ctrl+Shift+Alt+I must not satisfy a
+  // ctrl+shift+i rule — a subset check would wrongly accept both.
+  detector._handleKeyDown(keyEvent({ ctrlKey: true, key: 'I', code: 'KeyI' }));
+  detector._handleKeyDown(keyEvent({ ctrlKey: true, shiftKey: true, altKey: true, key: 'I', code: 'KeyI' }));
+  assert.deepEqual(violations, [], 'only the exact modifier set may fire');
+});
+
+check('AltGr cannot trip a ctrl rule', () => {
+  // On Windows AltGr sets ctrlKey AND altKey. Typing an "i" that needs AltGr
+  // must not look like a shortcut.
+  const { detector, violations } = makeShortcutHarness({ combos: ['ctrl+alt+i'] });
+  detector._handleKeyDown(keyEvent({ ctrlKey: true, altKey: true, key: 'i', code: 'KeyI' }));
+  assert.equal(violations.length, 1, 'a rule that explicitly asks for ctrl+alt is honoured');
+
+  // And no shipped default asks for ctrl+alt, so AltGr cannot fire one.
+  for (const combo of DEVTOOLS_COMBOS.other) {
+    assert.ok(!(combo.includes('ctrl') && combo.includes('alt')), `unsafe default: ${combo}`);
+  }
+});
+
+check('a bare key press is ignored', () => {
+  const { detector, violations } = makeShortcutHarness();
+  detector._handleKeyDown(keyEvent({ key: 'i', code: 'KeyI' }));
+  detector._handleKeyDown(keyEvent({ shiftKey: true, key: 'I', code: 'KeyI' }));
+  assert.deepEqual(violations, []);
+});
+
+check('holding the key does not spam violations', () => {
+  const { detector, violations } = makeShortcutHarness();
+  detector._handleKeyDown(ctrlShiftI());
+  detector._handleKeyDown(keyEvent({ ...ctrlShiftI(), repeat: true }));
+  detector._handleKeyDown(keyEvent({ ...ctrlShiftI(), repeat: true }));
+  assert.equal(violations.length, 1, 'auto-repeat must not be reported');
+});
+
+check('an IME composition is not a shortcut', () => {
+  const { detector, violations } = makeShortcutHarness();
+  detector._handleKeyDown(keyEvent({ ...ctrlShiftI(), isComposing: true }));
+  assert.deepEqual(violations, [], 'mid-composition keys belong to the IME');
+});
+
+check('block: true prevents the default, and says so', () => {
+  const { detector, violations } = makeShortcutHarness({ block: true });
+  const event = ctrlShiftI();
+  detector._handleKeyDown(event);
+  assert.equal(event.defaultPrevented, true, 'preventDefault is the only way to stop the browser');
+  assert.equal(violations[0].details.blocked, true);
+});
+
+check('block never touches keys the host did not ask about', () => {
+  const { detector } = makeShortcutHarness({ block: true });
+  const event = keyEvent({ key: 'a', code: 'KeyA' });
+  detector._handleKeyDown(event);
+  assert.equal(event.defaultPrevented, false, 'an unmatched keystroke must pass through');
+});
+
+check('custom combos replace the default list', () => {
+  const { detector, violations } = makeShortcutHarness({ combos: ['ctrl+p'] });
+  detector._handleKeyDown(ctrlShiftI());
+  assert.deepEqual(violations, [], 'the default devtools combo is gone once combos is set');
+
+  detector._handleKeyDown(keyEvent({ ctrlKey: true, key: 'p', code: 'KeyP' }));
+  assert.equal(violations.length, 1);
+  assert.equal(violations[0].details.combo, 'ctrl+p');
+  assert.equal(violations[0].details.label, null, 'an unknown combo has no label');
+});
+
+check('a typo in one combo does not disable the others', () => {
+  const { detector, violations, logs } = makeShortcutHarness({
+    combos: ['ctrl+shit+i', 'ctrl+shift+i'],
+  });
+  const warning = logs.find((entry) => entry.level === 'warn');
+  assert.ok(warning, 'an unparseable combo must be reported, never silently dropped');
+  assert.match(warning.message, /ctrl\+shit\+i/);
+
+  detector._handleKeyDown(ctrlShiftI());
+  assert.equal(violations.length, 1, 'the valid combo must still work');
+});
+
+check('parseCombo rejects anything that cannot be a shortcut', () => {
+  assert.equal(parseCombo('ctrl+shift'), null, 'modifiers with no key');
+  assert.equal(parseCombo('shift'), null, 'a lone modifier is not a key');
+  assert.equal(parseCombo(''), null);
+  assert.equal(parseCombo(42), null);
+  assert.equal(parseCombo('ctrl+banana'), null, 'an unknown key name');
+  assert.equal(parseCombo('hyper+i'), null, 'an unknown modifier');
+});
+
+check('parseCombo normalises order and aliases', () => {
+  const combo = parseCombo('Shift+Ctrl+I', 'other');
+  assert.equal(combo.raw, 'ctrl+shift+i');
+  assert.equal(combo.key, 'i');
+  assert.equal(parseCombo('cmd+u', 'mac').raw, 'meta+u');
+  assert.equal(parseCombo('ctrl+esc', 'other').key, 'escape');
+  // A lone key is valid: F12 has no modifiers. Requiring two tokens here used to
+  // reject it, so the shipped f12 default could never match.
+  assert.equal(parseCombo('f12', 'other').raw, 'f12');
+});
+
+check('mod resolves per platform', () => {
+  const mac = parseCombo('mod+shift+i', 'mac');
+  const other = parseCombo('mod+shift+i', 'other');
+  assert.equal(mac.meta, true);
+  assert.equal(mac.ctrl, false);
+  assert.equal(other.ctrl, true);
+  assert.equal(other.meta, false);
+});
+
+check('the shipped defaults cover both platforms', () => {
+  assert.ok(DEVTOOLS_COMBOS.other.includes('ctrl+shift+i'));
+  assert.ok(DEVTOOLS_COMBOS.mac.includes('meta+alt+i'), 'macOS devtools is Cmd+Opt+I');
+  assert.ok(DEVTOOLS_COMBOS.other.includes('f12'));
+  assert.ok(DEVTOOLS_COMBOS.mac.includes('f12'));
+});
+
+check('detectPlatform falls back to "other" without a navigator', () =>
+  assert.equal(detectPlatform(), 'other'));
+
+check('the detector publishes its active combos', () => {
+  const { detector, states } = makeShortcutHarness();
+  detector._handleKeyDown(ctrlShiftI());
+  const last = states.at(-1);
+  assert.equal(last.name, 'shortcuts');
+  assert.equal(last.state.status, 'violation');
+  assert.equal(last.state.count, 1);
+
+  const state = detector.getState();
+  assert.ok(state.combos.includes('ctrl+shift+i'), 'the active combos must be inspectable');
+  assert.equal(state.lastCombo, 'ctrl+shift+i');
+});
+
+check('destroy() before init() is safe', () => {
+  const { detector } = makeShortcutHarness();
   detector.destroy();
   assert.equal(detector.getState().active, false);
 });

@@ -1,8 +1,8 @@
 # proctoring.js
 
 Zero-dependency browser proctoring toolkit. Detects tab switching, right-click
-use, camera tampering, missing or extra faces, and room noise — through one small
-event API.
+use, developer-tools shortcuts, camera tampering, missing or extra faces, and room
+noise — through one small event API.
 
 **[Live demo](https://proctoring-js-demo.netlify.app)** ·
 **[npm](https://www.npmjs.com/package/proctoring.js)**
@@ -57,6 +57,7 @@ Design rules it follows:
 |---|---|---|---|
 | `tabs` | **on** | none | Tab switch, window blur, page hidden |
 | `rightClick` | off | none | Right-click, keyboard Menu key, long-press menu |
+| `shortcuts` | off | none | DevTools / view-source shortcuts (`Ctrl+Shift+I`, `F12`, `Ctrl+U`, …) |
 | `camera` | off | camera | Denied camera, muted track, covered lens, frozen feed, unplugged device |
 | `face` | off | camera (shared) | No face, multiple faces, looking away |
 | `audio` | off | microphone | Sustained loud noise, spectral busyness |
@@ -90,6 +91,12 @@ new Proctor({
     dedupeMs: 400,                  // one gesture is one violation
     throttleMs: 500,                // minimum gap between reported right-clicks
     captureTarget: true,            // record tag/id/classes of the target
+  },
+
+  shortcuts: {
+    enabled: false,
+    combos: null,                   // null = the platform's devtools defaults
+    block: false,                   // preventDefault the shortcut (opt-in)
   },
 
   camera: {
@@ -186,6 +193,7 @@ Use `once()` for one-shot listeners and `off()` to remove one.
 | `tab-hidden` | high | The page was hidden past `minHiddenMs` |
 | `window-blur` | medium | Window lost focus while still visible |
 | `right-click` | medium | Right-click, Menu key, or long-press inside the page |
+| `shortcut-used` | high | A watched keyboard shortcut was pressed |
 | `camera-denied` | critical | Permission refused |
 | `camera-disabled` | critical | Track ended — device gone or revoked |
 | `camera-muted` | high | Track muted, or the image froze |
@@ -356,6 +364,106 @@ second device — treat it as a signal for human review, not as prevention.
 
 ---
 
+## Keyboard shortcuts
+
+```js
+new Proctor({ shortcuts: { enabled: true } });
+```
+
+Out of the box it watches the developer-tools and view-source combinations, which
+is the usual first move when someone wants to inspect or edit an exam page:
+
+| Platform | Watched by default |
+|---|---|
+| Windows / Linux | `Ctrl+Shift+I` · `Ctrl+Shift+J` · `Ctrl+Shift+K` · `Ctrl+Shift+C` · `Ctrl+U` · `F12` |
+| macOS | `Cmd+Opt+I` · `Cmd+Opt+J` · `Cmd+Opt+K` · `Cmd+Shift+C` · `Cmd+U` · `F12` |
+
+The platform list is chosen at start-up and exposed as `DEVTOOLS_COMBOS`, so you
+can build on it rather than retyping it:
+
+```js
+import { DEVTOOLS_COMBOS, detectPlatform } from 'proctoring.js';
+
+new Proctor({
+  shortcuts: {
+    enabled: true,
+    combos: [...DEVTOOLS_COMBOS[detectPlatform()], 'ctrl+p', 'mod+shift+v'],
+  },
+});
+```
+
+```js
+{
+  type: 'shortcut-used',
+  severity: 'high',
+  detector: 'shortcuts',
+  details: {
+    combo: 'ctrl+shift+i',   // the matched rule, canonicalised
+    label: 'devtools',       // or null for a combo the library does not know
+    blocked: false,
+    key: 'I',                // raw evidence, as the browser reported it
+    code: 'KeyI',
+    at: '2026-03-18T02:14:09.000Z',
+  },
+}
+```
+
+### Combo syntax
+
+Modifiers `ctrl`, `shift`, `alt`, `meta`, plus `mod` — which resolves to `meta`
+on macOS and `ctrl` elsewhere, the convention every editor uses — followed by one
+key. Order does not matter; the matched combo is reported canonically:
+
+```js
+parseCombo('Shift+Ctrl+I');        // { ctrl: true, shift: true, key: 'i', raw: 'ctrl+shift+i' }
+parseCombo('mod+shift+i', 'mac');  // { meta: true, ctrl: false, ... }
+parseCombo('ctrl+shift');          // null — modifiers with no key
+```
+
+A typo is logged as a warning and skipped rather than thrown, so one bad entry
+does not disable the rest — but it is never silent, because a rule that can never
+match is the worst kind of bug to debug.
+
+### Matching details that are easy to get wrong
+
+- **`Shift` uppercases `key`.** `Ctrl+Shift+I` arrives as `key: 'I'`, so a naive
+  `event.key === 'i'` comparison never fires. Both `event.code` and `event.key`
+  are accepted, which also means a Cyrillic or Greek layout still matches — the
+  physical key is the same even when the character is not.
+- **Modifier sets must match exactly.** A subset check would accept
+  `Ctrl+Shift+Alt+I` for a `ctrl+shift+i` rule. Exact matching also keeps **AltGr**
+  out: on Windows it sets `ctrlKey` *and* `altKey`, so a portable `ctrl+alt+i`
+  entry would fire every time a German or Polish candidate types an "i". No
+  shipped default uses `ctrl+alt` for that reason, and there is a test asserting
+  it stays that way.
+- **Auto-repeat and IME are ignored.** Holding the key fires a stream of repeats
+  and must not spam the report; a keydown during IME composition belongs to the
+  input method, not to a shortcut.
+
+### Blocking shortcuts
+
+Off by default — a library should not silently change how your page behaves, and
+hijacking `Ctrl+Shift+I` on a page you do not control is user-hostile.
+
+```js
+new Proctor({ shortcuts: { enabled: true, block: true } });
+```
+
+`preventDefault()` is called **only on a match**, never on unrelated keystrokes,
+and it is the only thing that stops the browser acting on the shortcut — which
+works in Chromium and Firefox for the DevTools and view-source keys.
+
+### Scope, honestly
+
+This detects a **keystroke**, not the tool. Someone who opens DevTools from the
+browser menu, with the mouse, from a second window, or with a browser extension
+produces nothing here — and once DevTools has focus, the page stops receiving
+`keydown` at all, so a candidate can open it and then do whatever they like
+without a single further event. Treat `shortcut-used` as one weak signal among
+several, never as proof that DevTools was not used.
+
+---
+
 ## Sending violations to a backend
 
 ```js
@@ -461,6 +569,7 @@ expose `getUserMedia` there. Tab detection works everywhere.
 |---|---|
 | `tabs` | Page Visibility API (universal) |
 | `rightClick` | `contextmenu` event (universal) |
+| `shortcuts` | `keydown` event (universal) |
 | `camera` | `navigator.mediaDevices.getUserMedia` |
 | `face` | WebGL (via TensorFlow.js) |
 | `audio` | Web Audio API |
@@ -494,18 +603,18 @@ not as proof.
 npm install
 npm run dev              # demo page at http://localhost:5173/demo.html
 npm run build            # emits dist/proctoring.js, .cjs, .umd.js + index.d.ts
-npm test                 # build + 76 checks against the built artifact
+npm test                 # build + 97 checks against the built artifact
 ```
 
-Five suites, 132 checks in total:
+Five suites, 166 checks in total:
 
 | Command | Checks | What it proves |
 |---|---|---|
-| `npm run verify` | 76 | Build output, exports, report math, screenshot helpers, right-click + face + audio decision logic |
-| `npm run verify:browser` | 33 | Real Edge: tab switch, right-click, camera stream, audio sampler, teardown, screenshots |
+| `npm run verify` | 97 | Build output, exports, report math, screenshot helpers, right-click + shortcut + face + audio decision logic |
+| `npm run verify:browser` | 44 | Real Edge: tab switch, right-click, keyboard shortcuts, camera stream, audio sampler, teardown, screenshots |
 | `npm run verify:umd` | 6 | The `<script src>` path via a plain static server |
 | `npm run verify:face` | 7 | face-api CDN + weights resolve and inference runs |
-| `npm run verify:static` | 10 | The deployed demo shape: one HTML file + the published CDN bundle |
+| `npm run verify:static` | 12 | The deployed demo shape: one HTML file + the published CDN bundle |
 
 `npm test` runs against `dist/`, not `src/`, so a build regression (a missing
 export, broken CJS interop) fails here rather than in a consumer's app.
@@ -539,11 +648,19 @@ Two deliberate testing choices worth knowing:
   absence of a false positive rather than a real `audio-too-loud` event. The
   loud path is covered by the stubbed-analyser tests.
 
-Right-click detection gets the opposite treatment: `verify:browser` pushes a
-**real** right-click through Edge's input pipeline, because a synthetic
-`dispatchEvent` would only prove that a listener exists. That is how the
-double-count bug in `throttleMs: 0` was found — the unit tests were happy with a
-config the browser then disproved.
+Right-click detection and keyboard shortcuts get the opposite treatment:
+`verify:browser` pushes a **real** right-click and a **real** `Ctrl+Shift+I`
+through Edge's input pipeline via `Input.dispatchMouseEvent` /
+`Input.dispatchKeyEvent`, because a page-scripted `dispatchEvent` proves only that
+a listener exists — it cannot trigger a browser shortcut, so it cannot prove the
+detector sees what a user produces. That is how the double-count bug in
+`throttleMs: 0` was found: the unit tests were happy with a config the browser
+then disproved.
+
+The genuine keystroke check runs with `block: true`, which serves two purposes at
+once — it proves `preventDefault` reaches the browser before the shortcut is
+acted on, and it stops Edge from actually opening DevTools in the middle of the
+run.
 
 > The UMD check spawns its own static server rather than using Vite, because
 > Vite's dev server pipes every `.js` through its ESM transform and would inject

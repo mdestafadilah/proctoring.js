@@ -95,14 +95,14 @@ try {
   })()`);
 
   assert.equal(load.hasGlobal, true, 'window.Proctoring must be defined');
-  assert.equal(load.version, '0.2.0', `unexpected version: ${load.version}`);
-  assert.equal(load.badge, 'v0.2.0');
-  assert.deepEqual(load.detectors, ['tabs', 'rightClick', 'camera', 'face', 'audio']);
+  assert.equal(load.version, '0.3.0', `unexpected version: ${load.version}`);
+  assert.equal(load.badge, 'v0.3.0');
+  assert.deepEqual(load.detectors, ['tabs', 'rightClick', 'shortcuts', 'camera', 'face', 'audio']);
   ok(`UMD dari jsDelivr dimuat (window.Proctoring v${load.version})`);
 
   assert.equal(load.cdnScript.length, 1, 'the demo must load exactly one CDN script');
   assert.ok(
-    load.cdnScript[0].includes('proctoring.js@0.2.0'),
+    load.cdnScript[0].includes('proctoring.js@0.3.0'),
     `unexpected CDN URL: ${load.cdnScript[0]}`
   );
   ok('skrip dimuat dari URL jsDelivr yang di-pin ke versi terbit');
@@ -224,6 +224,41 @@ try {
   ok(`total naik ke ${afterClick.total} dan skor turun ke ${afterClick.score}`);
 
   await page.evaluate('document.getElementById("pjs-probe")?.remove()');
+
+  // ---------------------------------------------------------------------
+  // 2c. Keyboard shortcuts, through the demo UI and the published bundle.
+  //
+  //     Deliberately a synthetic keydown rather than a genuine one: the demo
+  //     does not block the shortcut, so a real Ctrl+Shift+I would open DevTools
+  //     in the middle of the run. The genuine keystroke path is proved by
+  //     verify-browser.mjs, which pushes it through Edge's input pipeline.
+  // ---------------------------------------------------------------------
+  console.log('\nStatic demo: shortcut keyboard');
+
+  await page.evaluate(`(function () {
+    document.dispatchEvent(new KeyboardEvent('keydown', {
+      key: 'I', code: 'KeyI', ctrlKey: true, shiftKey: true,
+      bubbles: true, cancelable: true,
+    }));
+    return true;
+  })()`);
+
+  await page.waitFor(
+    `document.getElementById('log').innerText.includes('shortcut-used')`,
+    'shortcut tercatat di log'
+  );
+  ok('Ctrl+Shift+I tercatat di log sebagai "shortcut-used"');
+
+  await page.waitFor(
+    `document.getElementById('detectors').innerText.includes('shortcuts')`,
+    'baris status shortcuts muncul'
+  );
+
+  const afterShortcut = await page.evaluate(
+    `document.getElementById('statTotal').textContent`
+  );
+  assert.equal(afterShortcut, '3', `expected 3 violations after the shortcut, got ${afterShortcut}`);
+  ok(`total naik ke ${afterShortcut}`);
 
   // ---------------------------------------------------------------------
   // 3. Stop and teardown.

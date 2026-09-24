@@ -52,11 +52,11 @@ try {
   ok('window.Proctoring is defined after a plain <script src>');
 
   assert.equal(result.globalName, 'Proctoring');
-  assert.equal(result.version, '0.2.0');
+  assert.equal(result.version, '0.3.0');
   ok(`global is named "Proctoring" and exposes version ${result.version}`);
 
   assert.equal(result.hasProctor, true, 'Proctor class must be on the global');
-  assert.deepEqual(result.detectors, ['tabs', 'rightClick', 'camera', 'face', 'audio']);
+  assert.deepEqual(result.detectors, ['tabs', 'rightClick', 'shortcuts', 'camera', 'face', 'audio']);
   ok('Proctor class and every detector are reachable');
 
   assert.equal(result.eventSample, 'violation');

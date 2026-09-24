@@ -70,6 +70,7 @@ export type ViolationType =
   | 'tab-hidden'
   | 'window-blur'
   | 'right-click'
+  | 'shortcut-used'
   | 'camera-disabled'
   | 'camera-muted'
   | 'camera-denied'
@@ -137,6 +138,17 @@ export interface RightClickOptions {
   dedupeMs?: number;
   throttleMs?: number;
   captureTarget?: boolean;
+}
+
+export interface ShortcutsOptions {
+  enabled?: boolean;
+  /**
+   * Combos to watch, e.g. ['ctrl+shift+i', 'ctrl+p']. null uses the platform's
+   * developer-tools list. Modifiers: ctrl, shift, alt, meta, and mod (meta on
+   * macOS, ctrl elsewhere).
+   */
+  combos?: string[] | null;
+  block?: boolean;
 }
 
 export interface CameraOptions {
@@ -211,6 +223,7 @@ export interface ProctorOptions {
   metadata?: Record<string, unknown>;
   tabs?: TabsOptions;
   rightClick?: RightClickOptions;
+  shortcuts?: ShortcutsOptions;
   camera?: CameraOptions;
   face?: FaceOptions;
   audio?: AudioOptions;
@@ -271,6 +284,15 @@ export declare const SEVERITY: Readonly<Record<string, Severity>>;
 export declare const DEFAULT_OPTIONS: ProctorOptions;
 export declare const DEFAULT_SEVERITY: Readonly<Record<string, Severity>>;
 export declare const DETECTOR_NAMES: readonly string[];
+export declare const DEVTOOLS_COMBOS: Readonly<{ mac: readonly string[]; other: readonly string[] }>;
+
+/** Parse a combo such as 'ctrl+shift+i'. Returns null when it cannot be one. */
+export declare function parseCombo(
+  raw: string,
+  platform?: 'mac' | 'other'
+): { ctrl: boolean; shift: boolean; alt: boolean; meta: boolean; key: string; raw: string } | null;
+
+export declare function detectPlatform(): 'mac' | 'other';
 export declare const FACE_API_VERSION: string;
 export declare const CDN_DEFAULTS: Readonly<{ scriptUrl: string; modelUrl: string }>;
 export declare const version: string;
