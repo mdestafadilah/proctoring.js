@@ -667,6 +667,17 @@ run.
 > an `import` into the UMD wrapper. The same applies if you test the bundle by
 > hand — serve it as a plain static file.
 
+### Project layout
+
+| Path | What it is |
+|---|---|
+| `src/` | Library source. `core/` holds the orchestrator; `detectors/` is the registry, where a new feature is one file plus one entry. |
+| `scripts/` | The verification suites and the Netlify deploy helper. Not published. |
+| `netlify-demo/` | The static demo site, hosted separately at `proctoring-js-demo.netlify.app`. |
+| `demo.html` | The richer demo page served by `npm run dev`. |
+| `models/` | Local face-api weights for the `module` and `custom` providers (~18 MB). Tracked for convenience, excluded from the tarball. |
+| `legacy/` | Frozen snapshot of the original Preact prototype this project replaced. Not built, not tested, not published — see [`legacy/README.md`](./legacy/README.md). |
+
 ### Environment variables
 
 **None are required.** Every one has a working fallback, and `npm test` plus all
