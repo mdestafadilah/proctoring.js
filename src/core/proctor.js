@@ -4,9 +4,7 @@ import { BackendTransport } from './transport.js';
 import { DEFAULT_OPTIONS, EVENTS, LOG_LEVELS, VIOLATION_TYPES, SEVERITY } from './options.js';
 import { mergeOptions, isBrowser, isSecureContext } from './utils.js';
 import { captureFrame, isVisualViolation } from './screenshot.js';
-import { createDetector } from '../detectors/index.js';
-
-const DETECTOR_NAMES = ['tabs', 'camera', 'face', 'audio'];
+import { createDetector, DETECTOR_NAMES } from '../detectors/index.js';
 
 /**
  * Proctoring session.

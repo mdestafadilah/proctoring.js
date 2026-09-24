@@ -180,8 +180,9 @@
       </header>
 
       <div class="hint">
-        Coba: <strong>pindah ke tab lain</strong> lalu kembali · <strong>tutup kamera</strong> dengan
-        tangan · <strong>putar kepala</strong> dari tengah frame · <strong>buat suara</strong>.
+        Coba: <strong>pindah ke tab lain</strong> lalu kembali · <strong>klik kanan</strong> di
+        halaman · <strong>tutup kamera</strong> dengan tangan · <strong>putar kepala</strong> dari
+        tengah frame · <strong>buat suara</strong>.
         Semua deteksi jalan lokal di browser Anda — tidak ada data yang dikirim ke mana pun.
       </div>
 
@@ -195,6 +196,7 @@
         </div>
         <div class="controls">
           <label class="toggle"><input type="checkbox" id="optTabs" checked /> tabs</label>
+          <label class="toggle"><input type="checkbox" id="optRightClick" checked /> rightClick</label>
           <label class="toggle"><input type="checkbox" id="optCamera" checked /> camera</label>
           <label class="toggle"><input type="checkbox" id="optFace" /> face</label>
           <label class="toggle"><input type="checkbox" id="optAudio" /> audio</label>
@@ -230,7 +232,7 @@
       would. This is deliberate: it proves the artifact on npm works, rather
       than a local build that only exists on the author's machine.
     -->
-    <script src="https://cdn.jsdelivr.net/npm/proctoring.js@0.1.0/dist/proctoring.umd.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/proctoring.js@0.2.0/dist/proctoring.umd.js"></script>
     <script>
       (function () {
         'use strict';
@@ -297,7 +299,7 @@
         function startPolling() {
           clearInterval(pollTimer);
           pollTimer = setInterval(function () {
-            var names = ['tabs', 'camera', 'face', 'audio'];
+            var names = window.Proctoring.DETECTOR_NAMES;
             var html = '';
             for (var i = 0; i < names.length; i++) {
               var name = names[i];
@@ -329,6 +331,7 @@
             sessionId: 'demo-' + Date.now(),
             logLevel: 'warn',
             tabs: { enabled: $('optTabs').checked },
+            rightClick: { enabled: $('optRightClick').checked, block: false },
             camera: { enabled: wantCamera, videoElement: '#preview' },
             face: { enabled: wantFace },
             audio: { enabled: $('optAudio').checked },

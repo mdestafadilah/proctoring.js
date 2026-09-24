@@ -53,8 +53,8 @@ try {
   })()`);
 
   assert.equal(api.hasProctor, true, 'Proctor must be exported');
-  assert.deepEqual(api.detectors, ['tabs', 'camera', 'face', 'audio']);
-  assert.equal(api.version, '0.1.0');
+  assert.deepEqual(api.detectors, ['tabs', 'rightClick', 'camera', 'face', 'audio']);
+  assert.equal(api.version, '0.2.0');
   assert.ok(api.modelUrl.startsWith('https://cdn.jsdelivr.net/'), 'model URL must be a CDN URL');
   ok(`module loads in browser (${api.keys.length} exports, v${api.version})`);
 
@@ -463,7 +463,194 @@ try {
   ok('destroy() closes the AudioContext (microphone is released)');
 
   // ---------------------------------------------------------------------
-  // 8. No console noise.
+  // 8. Right-click detector against genuine input.
+  //    A synthetic `dispatchEvent` would only prove a listener exists. A real
+  //    right-click pushed through the browser's input pipeline proves the
+  //    wiring, the capture phase, and the menu suppression.
+  // ---------------------------------------------------------------------
+  console.log('\nBrowser: right-click detector');
+
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+  // Aim at a dead rectangle: clicking the demo's own controls would start a
+  // camera and could navigate the page out from under the test.
+  await page.evaluate(`(() => {
+    const probe = document.createElement('div');
+    probe.id = 'pjs-probe';
+    probe.style.cssText =
+      'position:fixed;left:0;top:0;width:160px;height:80px;z-index:2147483647;background:#eee';
+    document.body.appendChild(probe);
+    return true;
+  })()`);
+
+  const PROBE = { x: 80, y: 40 };
+  const mouse = (type, button, buttons) =>
+    page.send('Input.dispatchMouseEvent', {
+      type,
+      x: PROBE.x,
+      y: PROBE.y,
+      button,
+      buttons,
+      clickCount: 1,
+    });
+
+  const click = async (button) => {
+    await mouse('mousePressed', button, button === 'right' ? 2 : 1);
+    await mouse('mouseReleased', button, 0);
+    await sleep(200);
+  };
+
+  const setup = (overrides) =>
+    page.evaluate(`(async () => {
+      const { Proctor } = await import('/src/index.js');
+      const proctor = new Proctor({
+        logLevel: 'silent',
+        report: { persist: false },
+        tabs: { enabled: false },
+        rightClick: ${JSON.stringify(overrides)},
+      });
+      window.__pjsEvents = [];
+      window.__pjsPrevented = null;
+      proctor.on('violation', (v) => window.__pjsEvents.push(v));
+      // Registered after the detector and in the bubble phase, so it can only
+      // report the decision the detector already made during the capture phase.
+      document.addEventListener('contextmenu', (e) => {
+        window.__pjsPrevented = e.defaultPrevented;
+      });
+      await proctor.start();
+      window.__pjs = proctor;
+      return { pointerListener: Boolean(proctor.getDetector('rightClick')?._onPointerDown) };
+    })()`);
+
+  const teardown = () =>
+    page.evaluate(`(() => {
+      const out = {
+        events: window.__pjsEvents ?? [],
+        prevented: window.__pjsPrevented,
+        state: window.__pjs?.getDetectorState('rightClick') ?? null,
+      };
+      window.__pjs?.destroy();
+      return out;
+    })()`);
+
+  // (a) A synthetic event, purely to pin the default posture: report, and do
+  //     not touch the page.
+  const synthetic = await page.evaluate(`(async () => {
+    const { Proctor } = await import('/src/index.js');
+    const proctor = new Proctor({
+      logLevel: 'silent',
+      report: { persist: false },
+      tabs: { enabled: false },
+      rightClick: { enabled: true, block: false, detectPointerDown: false, throttleMs: 0 },
+    });
+    const events = [];
+    proctor.on('violation', (v) => events.push(v));
+    await proctor.start();
+
+    const probe = document.getElementById('pjs-probe');
+    // dispatchEvent returns false when a listener called preventDefault().
+    const notPrevented = probe.dispatchEvent(
+      new MouseEvent('contextmenu', { bubbles: true, cancelable: true, button: 2 })
+    );
+    await new Promise((r) => setTimeout(r, 60));
+
+    const report = proctor.getReport();
+    proctor.destroy();
+    return { events, notPrevented, report };
+  })()`);
+
+  assert.equal(synthetic.events.length, 1, 'a contextmenu event must be reported');
+  const rightClickViolation = synthetic.events[0];
+  assert.equal(rightClickViolation.type, 'right-click');
+  assert.equal(rightClickViolation.severity, 'medium', 'right-click should default to medium severity');
+  assert.equal(rightClickViolation.detector, 'rightClick');
+  assert.equal(rightClickViolation.details.target, 'div#pjs-probe', 'the target element must be recorded');
+  assert.equal(rightClickViolation.details.blocked, false);
+  ok('a contextmenu event produces a "right-click" violation naming its target');
+
+  assert.equal(synthetic.notPrevented, true, 'block:false must leave the page alone');
+  ok('block:false does not suppress the menu');
+
+  assert.equal(synthetic.report.countsByType['right-click'], 1);
+  assert.equal(synthetic.report.worstSeverity, 'medium');
+  assert.ok(synthetic.report.score < 100, 'the score must react to a right-click');
+  ok(`the report aggregates right-clicks (score=${synthetic.report.score})`);
+
+  // (b) Genuine input, shipped defaults: a real left click must be silent, a
+  //     real right click must fire once and must suppress the native menu.
+  const attached = await setup({ enabled: true, block: true });
+  assert.equal(attached.pointerListener, true, 'pointerdown must be watched by default');
+  ok('the detector attaches its pointerdown listener by default');
+
+  await click('left');
+  assert.equal(
+    await page.evaluate('window.__pjsEvents.length'),
+    0,
+    'a real left click must never be reported'
+  );
+  ok('a real left click produces no violation');
+
+  await click('right');
+  const real = await teardown();
+
+  assert.equal(
+    real.events.length,
+    1,
+    `one right-click must be one violation, got ${JSON.stringify(real.events.map((e) => e.details?.source))}`
+  );
+  assert.equal(real.events[0].type, 'right-click');
+  assert.equal(real.events[0].details.target, 'div#pjs-probe');
+  ok(`a real right-click is detected once (source=${real.events[0].details.source})`);
+
+  assert.equal(
+    real.prevented,
+    true,
+    'block:true must preventDefault the real context menu, in the capture phase'
+  );
+  ok('block:true suppresses the real context menu');
+
+  assert.equal(real.state?.count, 1, 'the detector must publish how many right-clicks it saw');
+  ok('the detector publishes its own state');
+
+  // (c) With pointerdown disabled the genuine `contextmenu` event alone must
+  //     still be caught — this is what proves the capture-phase listener works
+  //     on a real gesture rather than only on a synthetic one.
+  const ctxOnly = await setup({ enabled: true, block: true, detectPointerDown: false });
+  assert.equal(ctxOnly.pointerListener, false, 'pointerdown must be off when disabled');
+
+  await click('right');
+  const contextMenuOnly = await teardown();
+
+  assert.equal(
+    contextMenuOnly.events.length,
+    1,
+    `a real right-click must reach the contextmenu listener: ${JSON.stringify(contextMenuOnly.events)}`
+  );
+  assert.equal(
+    contextMenuOnly.events[0].details.source,
+    'contextmenu',
+    'the browser must have generated a genuine contextmenu event'
+  );
+  ok('the contextmenu listener alone catches a real right-click');
+
+  // (d) Regression guard: with the rate limit switched off, dedupe must still
+  //     collapse the gesture. Relying on `throttleMs` for this produced two
+  //     violations per real right-click.
+  await setup({ enabled: true, block: true, throttleMs: 0 });
+  await click('right');
+  const unthrottled = await teardown();
+
+  assert.equal(
+    unthrottled.events.length,
+    1,
+    `throttleMs:0 must not double-count a gesture, got ${JSON.stringify(unthrottled.events.map((e) => e.details?.source))}`
+  );
+  ok('throttleMs:0 does not double-count a single gesture');
+
+  await page.evaluate('document.getElementById("pjs-probe")?.remove()');
+
+  // ---------------------------------------------------------------------
+  // 9. No console noise.
   // ---------------------------------------------------------------------
   console.log('\nBrowser: console');
   const realErrors = page.errors.filter(

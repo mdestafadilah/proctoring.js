@@ -112,7 +112,7 @@
   <body>
     <main>
       <h1>proctoring.js</h1>
-      <p class="sub">Live demo of all four detectors. Open a second tab, cover the camera, or make some noise.</p>
+      <p class="sub">Live demo of every detector. Open a second tab, right-click, cover the camera, or make some noise.</p>
 
       <div class="panel" style="margin-bottom: 16px">
         <h2>Session</h2>
@@ -124,6 +124,7 @@
         </div>
         <div class="controls">
           <label class="toggle"><input type="checkbox" id="optTabs" checked /> tabs</label>
+          <label class="toggle"><input type="checkbox" id="optRightClick" checked /> rightClick</label>
           <label class="toggle"><input type="checkbox" id="optCamera" checked /> camera</label>
           <label class="toggle"><input type="checkbox" id="optFace" /> face</label>
           <label class="toggle"><input type="checkbox" id="optAudio" /> audio</label>
@@ -156,7 +157,7 @@
     </main>
 
     <script type="module">
-      import { Proctor, formatDuration, downloadReportCsv } from '/src/index.js';
+      import { Proctor, DETECTOR_NAMES, formatDuration, downloadReportCsv } from '/src/index.js';
 
       const $ = (id) => document.getElementById(id);
       const logEl = $('log');
@@ -197,6 +198,8 @@
           sessionId: `demo-${Date.now()}`,
           logLevel: 'debug',
           tabs: { enabled: $('optTabs').checked },
+          // Detect only, so the demo's own menu still works.
+          rightClick: { enabled: $('optRightClick').checked, block: false },
           camera: {
             enabled: $('optCamera').checked || $('optFace').checked,
             videoElement: '#preview',
@@ -263,7 +266,9 @@
           if (audio?.rms != null) $('statRms').textContent = audio.rms.toFixed(3);
 
           const lines = [];
-          for (const name of ['tabs', 'camera', 'face', 'audio']) {
+          // Read the registry instead of hardcoding names, so a new detector
+          // shows up here without editing the demo.
+          for (const name of DETECTOR_NAMES) {
             const state = proctor?.getDetectorState(name);
             const running = Boolean(proctor?.getDetector(name));
             const dot = running ? '●' : '○';

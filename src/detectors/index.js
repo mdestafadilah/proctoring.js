@@ -1,4 +1,5 @@
 import { TabsDetector } from './tabs.js';
+import { RightClickDetector } from './right-click.js';
 import { CameraDetector } from './camera.js';
 import { FaceDetector } from './face.js';
 import { AudioDetector } from './audio.js';
@@ -11,6 +12,7 @@ import { AudioDetector } from './audio.js';
  */
 export const DETECTORS = Object.freeze({
   tabs: TabsDetector,
+  rightClick: RightClickDetector,
   camera: CameraDetector,
   face: FaceDetector,
   audio: AudioDetector,
@@ -33,4 +35,4 @@ export function createDetector(name, config, context) {
   return new Detector(config, context);
 }
 
-export { TabsDetector, CameraDetector, FaceDetector, AudioDetector };
+export { TabsDetector, RightClickDetector, CameraDetector, FaceDetector, AudioDetector };

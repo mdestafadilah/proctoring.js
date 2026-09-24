@@ -69,6 +69,7 @@ export type Severity = 'info' | 'low' | 'medium' | 'high' | 'critical';
 export type ViolationType =
   | 'tab-hidden'
   | 'window-blur'
+  | 'right-click'
   | 'camera-disabled'
   | 'camera-muted'
   | 'camera-denied'
@@ -127,6 +128,15 @@ export interface TabsOptions {
   trackWindowBlur?: boolean;
   minHiddenMs?: number;
   throttleMs?: number;
+}
+
+export interface RightClickOptions {
+  enabled?: boolean;
+  block?: boolean;
+  detectPointerDown?: boolean;
+  dedupeMs?: number;
+  throttleMs?: number;
+  captureTarget?: boolean;
 }
 
 export interface CameraOptions {
@@ -200,6 +210,7 @@ export interface ProctorOptions {
   sessionId?: string | null;
   metadata?: Record<string, unknown>;
   tabs?: TabsOptions;
+  rightClick?: RightClickOptions;
   camera?: CameraOptions;
   face?: FaceOptions;
   audio?: AudioOptions;

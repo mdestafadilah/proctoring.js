@@ -1,7 +1,8 @@
 # proctoring.js
 
-Zero-dependency browser proctoring toolkit. Detects tab switching, camera
-tampering, missing or extra faces, and room noise — through one small event API.
+Zero-dependency browser proctoring toolkit. Detects tab switching, right-click
+use, camera tampering, missing or extra faces, and room noise — through one small
+event API.
 
 **[Live demo](https://proctoring-js-demo.netlify.app)** ·
 **[npm](https://www.npmjs.com/package/proctoring.js)**
@@ -55,6 +56,7 @@ Design rules it follows:
 | Detector | Default | Permissions | What it catches |
 |---|---|---|---|
 | `tabs` | **on** | none | Tab switch, window blur, page hidden |
+| `rightClick` | off | none | Right-click, keyboard Menu key, long-press menu |
 | `camera` | off | camera | Denied camera, muted track, covered lens, frozen feed, unplugged device |
 | `face` | off | camera (shared) | No face, multiple faces, looking away |
 | `audio` | off | microphone | Sustained loud noise, spectral busyness |
@@ -79,6 +81,15 @@ new Proctor({
     trackWindowBlur: true,          // also flag focus loss, not just tab switch
     minHiddenMs: 0,                 // ignore flicker shorter than this
     throttleMs: 300,
+  },
+
+  rightClick: {
+    enabled: false,
+    block: false,                   // suppress the browser menu (opt-in)
+    detectPointerDown: true,        // catch it even if the page swallows the menu
+    dedupeMs: 400,                  // one gesture is one violation
+    throttleMs: 500,                // minimum gap between reported right-clicks
+    captureTarget: true,            // record tag/id/classes of the target
   },
 
   camera: {
@@ -174,6 +185,7 @@ Use `once()` for one-shot listeners and `off()` to remove one.
 |---|---|---|
 | `tab-hidden` | high | The page was hidden past `minHiddenMs` |
 | `window-blur` | medium | Window lost focus while still visible |
+| `right-click` | medium | Right-click, Menu key, or long-press inside the page |
 | `camera-denied` | critical | Permission refused |
 | `camera-disabled` | critical | Track ended — device gone or revoked |
 | `camera-muted` | high | Track muted, or the image froze |
@@ -280,6 +292,70 @@ Three behaviours worth knowing:
 If the frame cannot be read (no stream yet, a tainted canvas, a detached
 element), capture silently yields nothing rather than failing the violation.
 
+---
+
+## Right-click detection
+
+```js
+new Proctor({ rightClick: { enabled: true } });
+```
+
+A right-click inside the page produces one `right-click` violation, recording
+where it happened:
+
+```js
+{
+  type: 'right-click',
+  severity: 'medium',
+  detector: 'rightClick',
+  details: {
+    source: 'pointerdown',   // or 'contextmenu'
+    blocked: false,          // whether the menu was suppressed
+    x: 412, y: 268,
+    target: 'button#submit.primary',
+    at: '2026-03-18T02:14:09.000Z',
+  },
+}
+```
+
+Two signals feed it, and they are deliberately redundant:
+
+- **`contextmenu`**, listened for on `document` in the **capture** phase. It
+  covers a mouse right-click, the keyboard Menu key, `Shift+F10`, and a
+  long-press on Android. The capture phase matters: a page that calls
+  `stopPropagation()` in a bubble-phase listener would otherwise silence a
+  detector listening on `document`.
+- **A secondary-button `pointerdown`**, which fires first and still fires when a
+  page swallows the menu.
+
+Both signals arrive for one click, so the detector collapses them: a `contextmenu`
+within `dedupeMs` of a reported `pointerdown` is treated as the same gesture.
+`dedupeMs` is separate from `throttleMs` on purpose — setting `throttleMs: 0` to
+opt out of rate limiting must not also start double-counting every click.
+
+### Blocking the menu
+
+Off by default. A library should not silently change how your page behaves, and
+a right-click is normal on most pages — only you know whether it is suspicious
+in your context.
+
+```js
+new Proctor({ rightClick: { enabled: true, block: true } });
+```
+
+With `block: true` the browser menu is suppressed on **every** right-click, even
+ones whose report is dropped by the throttle — otherwise a second click inside
+the throttle window would quietly open the menu.
+
+### Scope, honestly
+
+This observes the **page**, not the machine. A right-click on the desktop, in
+another app, or on browser chrome produces nothing here. Catching that is what
+`tabs` and `camera` are for. It is also trivially defeated by devtools or a
+second device — treat it as a signal for human review, not as prevention.
+
+---
+
 ## Sending violations to a backend
 
 ```js
@@ -384,6 +460,7 @@ expose `getUserMedia` there. Tab detection works everywhere.
 | Feature | Requirement |
 |---|---|
 | `tabs` | Page Visibility API (universal) |
+| `rightClick` | `contextmenu` event (universal) |
 | `camera` | `navigator.mediaDevices.getUserMedia` |
 | `face` | WebGL (via TensorFlow.js) |
 | `audio` | Web Audio API |
@@ -417,18 +494,18 @@ not as proof.
 npm install
 npm run dev              # demo page at http://localhost:5173/demo.html
 npm run build            # emits dist/proctoring.js, .cjs, .umd.js + index.d.ts
-npm test                 # build + 57 checks against the built artifact
+npm test                 # build + 76 checks against the built artifact
 ```
 
-Four suites, 93 checks in total:
+Five suites, 132 checks in total:
 
 | Command | Checks | What it proves |
 |---|---|---|
-| `npm run verify` | 57 | Build output, exports, report math, screenshot helpers, face + audio decision logic |
-| `npm run verify:browser` | 23 | Real Edge: tab switch, camera stream, audio sampler, teardown, screenshots |
+| `npm run verify` | 76 | Build output, exports, report math, screenshot helpers, right-click + face + audio decision logic |
+| `npm run verify:browser` | 33 | Real Edge: tab switch, right-click, camera stream, audio sampler, teardown, screenshots |
 | `npm run verify:umd` | 6 | The `<script src>` path via a plain static server |
 | `npm run verify:face` | 7 | face-api CDN + weights resolve and inference runs |
-| `npm run verify:static` | 8 | The deployed demo shape: one HTML file + the published CDN bundle |
+| `npm run verify:static` | 10 | The deployed demo shape: one HTML file + the published CDN bundle |
 
 `npm test` runs against `dist/`, not `src/`, so a build regression (a missing
 export, broken CJS interop) fails here rather than in a consumer's app.
@@ -461,6 +538,12 @@ Two deliberate testing choices worth knowing:
 - **The synthetic microphone is silent**, so the browser suite asserts the
   absence of a false positive rather than a real `audio-too-loud` event. The
   loud path is covered by the stubbed-analyser tests.
+
+Right-click detection gets the opposite treatment: `verify:browser` pushes a
+**real** right-click through Edge's input pipeline, because a synthetic
+`dispatchEvent` would only prove that a listener exists. That is how the
+double-count bug in `throttleMs: 0` was found — the unit tests were happy with a
+config the browser then disproved.
 
 > The UMD check spawns its own static server rather than using Vite, because
 > Vite's dev server pipes every `.js` through its ESM transform and would inject

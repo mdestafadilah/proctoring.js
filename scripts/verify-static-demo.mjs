@@ -95,14 +95,14 @@ try {
   })()`);
 
   assert.equal(load.hasGlobal, true, 'window.Proctoring must be defined');
-  assert.equal(load.version, '0.1.0', `unexpected version: ${load.version}`);
-  assert.equal(load.badge, 'v0.1.0');
-  assert.deepEqual(load.detectors, ['tabs', 'camera', 'face', 'audio']);
+  assert.equal(load.version, '0.2.0', `unexpected version: ${load.version}`);
+  assert.equal(load.badge, 'v0.2.0');
+  assert.deepEqual(load.detectors, ['tabs', 'rightClick', 'camera', 'face', 'audio']);
   ok(`UMD dari jsDelivr dimuat (window.Proctoring v${load.version})`);
 
   assert.equal(load.cdnScript.length, 1, 'the demo must load exactly one CDN script');
   assert.ok(
-    load.cdnScript[0].includes('proctoring.js@0.1.0'),
+    load.cdnScript[0].includes('proctoring.js@0.2.0'),
     `unexpected CDN URL: ${load.cdnScript[0]}`
   );
   ok('skrip dimuat dari URL jsDelivr yang di-pin ke versi terbit');
@@ -161,6 +161,69 @@ try {
 
   assert.ok(ui.detectorRows.includes('tabs'), 'the detector status list must render');
   ok('daftar status detector dirender');
+
+  // ---------------------------------------------------------------------
+  // 2b. Right-click detection through the published bundle and the demo UI.
+  //     This is the strongest available proof: a genuine right-click, against
+  //     the artifact npm actually serves, wired through the demo's own options.
+  // ---------------------------------------------------------------------
+  console.log('\nStatic demo: klik kanan');
+
+  await page.evaluate(`(function () {
+    var probe = document.createElement('div');
+    probe.id = 'pjs-probe';
+    probe.style.cssText =
+      'position:fixed;left:0;top:0;width:140px;height:60px;z-index:2147483647;background:#ddd';
+    document.body.appendChild(probe);
+    return true;
+  })()`);
+
+  for (const type of ['mousePressed', 'mouseReleased']) {
+    await page.send('Input.dispatchMouseEvent', {
+      type,
+      x: 70,
+      y: 30,
+      button: 'right',
+      buttons: type === 'mousePressed' ? 2 : 0,
+      clickCount: 1,
+    });
+  }
+
+  await page.waitFor(
+    `document.getElementById('log').innerText.includes('right-click')`,
+    'klik kanan tercatat di log'
+  );
+  ok('klik kanan tercatat di log sebagai "right-click"');
+
+  // The demo detects without blocking, so a native menu is now open. Dismiss it
+  // so the rest of the run is not typing into a popup.
+  for (const type of ['keyDown', 'keyUp']) {
+    await page.send('Input.dispatchKeyEvent', {
+      type,
+      key: 'Escape',
+      code: 'Escape',
+      windowsVirtualKeyCode: 27,
+      nativeVirtualKeyCode: 27,
+    });
+  }
+
+  await page.waitFor(
+    `document.getElementById('detectors').innerText.includes('rightClick')`,
+    'baris status rightClick muncul'
+  );
+
+  const afterClick = await page.evaluate(`(function () {
+    return {
+      total: document.getElementById('statTotal').textContent,
+      score: document.getElementById('statScore').textContent,
+    };
+  })()`);
+
+  assert.equal(afterClick.total, '2', `expected 2 violations after the right-click, got ${afterClick.total}`);
+  assert.notEqual(afterClick.score, '100');
+  ok(`total naik ke ${afterClick.total} dan skor turun ke ${afterClick.score}`);
+
+  await page.evaluate('document.getElementById("pjs-probe")?.remove()');
 
   // ---------------------------------------------------------------------
   // 3. Stop and teardown.

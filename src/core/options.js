@@ -32,6 +32,7 @@ export const EVENTS = Object.freeze({
 export const VIOLATION_TYPES = Object.freeze({
   TAB_HIDDEN: 'tab-hidden',
   WINDOW_BLUR: 'window-blur',
+  RIGHT_CLICK: 'right-click',
   CAMERA_DISABLED: 'camera-disabled',
   CAMERA_MUTED: 'camera-muted',
   CAMERA_DENIED: 'camera-denied',
@@ -63,6 +64,7 @@ const SEVERITY_WEIGHT = {
 export const DEFAULT_SEVERITY = Object.freeze({
   [VIOLATION_TYPES.TAB_HIDDEN]: SEVERITY.HIGH,
   [VIOLATION_TYPES.WINDOW_BLUR]: SEVERITY.MEDIUM,
+  [VIOLATION_TYPES.RIGHT_CLICK]: SEVERITY.MEDIUM,
   [VIOLATION_TYPES.CAMERA_DISABLED]: SEVERITY.CRITICAL,
   [VIOLATION_TYPES.CAMERA_MUTED]: SEVERITY.HIGH,
   [VIOLATION_TYPES.CAMERA_DENIED]: SEVERITY.CRITICAL,
@@ -104,6 +106,36 @@ export const DEFAULT_OPTIONS = {
      */
     minHiddenMs: 0,
     throttleMs: 300,
+  },
+
+  /**
+   * Emit `violation` for right-click / context-menu use. No permissions needed.
+   *
+   * Off by default: a right-click is ordinary behaviour on most pages, and only
+   * the host app knows whether it is suspicious in its context. Grouped with
+   * `tabs` because it is the other detector that costs no permission prompt.
+   */
+  rightClick: {
+    enabled: false,
+    /**
+     * Also suppress the browser's own menu. Opt-in, because silently changing
+     * how the host page behaves is not a library's call to make.
+     */
+    block: false,
+    /**
+     * Treat a secondary-button `pointerdown` as a right-click too. It fires
+     * before `contextmenu` and still fires on pages that swallow the menu.
+     */
+    detectPointerDown: true,
+    /**
+     * A `contextmenu` arriving this soon after a reported `pointerdown` is the
+     * same gesture, not a second one. Deliberately independent of `throttleMs`.
+     */
+    dedupeMs: 400,
+    /** Minimum gap between two reported right-clicks. 0 disables the cap. */
+    throttleMs: 500,
+    /** Record tag/id/classes of the element that was right-clicked. */
+    captureTarget: true,
   },
 
   camera: {

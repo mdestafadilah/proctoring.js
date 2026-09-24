@@ -21,6 +21,7 @@ export class TabsDetector {
     this.hidden = false;
     this.hiddenSince = 0;
     this.blurred = false;
+    this._destroyed = false;
 
     this._onVisibility = null;
     this._onBlur = null;
@@ -127,7 +128,7 @@ export class TabsDetector {
   /** Current state, exposed for a status indicator in the host UI. */
   getState() {
     return {
-      active: true,
+      active: !this._destroyed,
       hidden: this.hidden,
       blurred: this.blurred,
       hiddenForMs: this.hidden ? Date.now() - this.hiddenSince : 0,
@@ -144,6 +145,7 @@ export class TabsDetector {
     this._onBlur = null;
     this._onFocus = null;
     this._onPageHide = null;
+    this._destroyed = true;
     this.context.setState('tabs', { active: false, status: 'destroyed' });
   }
 }

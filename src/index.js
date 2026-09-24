@@ -25,6 +25,7 @@ export { BackendTransport } from './core/transport.js';
 
 export { DETECTORS, DETECTOR_NAMES, createDetector } from './detectors/index.js';
 export { TabsDetector } from './detectors/tabs.js';
+export { RightClickDetector } from './detectors/right-click.js';
 export { CameraDetector } from './detectors/camera.js';
 export { FaceDetector } from './detectors/face.js';
 export { AudioDetector, computeRms, computeSpectralDensity } from './detectors/audio.js';
@@ -55,4 +56,4 @@ export {
 
 export { isBrowser, isSecureContext, mergeOptions, throttle, every, uid, clamp } from './core/utils.js';
 
-export const version = '0.1.0';
+export const version = '0.2.0';

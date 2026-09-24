@@ -55,15 +55,18 @@ const {
   dataUrlBytes,
   FaceDetector,
   AudioDetector,
+  RightClickDetector,
   version,
 } = esm;
 
 check('Proctor is a constructor', () => assert.equal(typeof Proctor, 'function'));
 check('createProctor is a factory', () => assert.equal(typeof createProctor, 'function'));
 check('default export is Proctor', () => assert.equal(esm.default, Proctor));
-check('version matches package.json', () => assert.equal(version, '0.1.0'));
-check('all four detectors are registered', () =>
-  assert.deepEqual([...DETECTOR_NAMES], ['tabs', 'camera', 'face', 'audio']));
+check('version matches package.json', () => assert.equal(version, '0.2.0'));
+check('every detector is registered', () =>
+  assert.deepEqual([...DETECTOR_NAMES], ['tabs', 'rightClick', 'camera', 'face', 'audio']));
+check('the registry maps names to classes', () =>
+  assert.equal(esm.DETECTORS.rightClick, RightClickDetector));
 check('event names are stable', () => {
   assert.equal(EVENTS.VIOLATION, 'violation');
   assert.equal(EVENTS.READY, 'ready');
@@ -72,9 +75,11 @@ check('event names are stable', () => {
 check('violation type ids are the wire format', () => {
   assert.equal(VIOLATION_TYPES.TAB_HIDDEN, 'tab-hidden');
   assert.equal(VIOLATION_TYPES.FACE_MULTIPLE, 'face-multiple');
+  assert.equal(VIOLATION_TYPES.RIGHT_CLICK, 'right-click');
 });
 check('only tabs is enabled by default', () => {
   assert.equal(DEFAULT_OPTIONS.tabs.enabled, true);
+  assert.equal(DEFAULT_OPTIONS.rightClick.enabled, false);
   assert.equal(DEFAULT_OPTIONS.camera.enabled, false);
   assert.equal(DEFAULT_OPTIONS.face.enabled, false);
   assert.equal(DEFAULT_OPTIONS.audio.enabled, false);
@@ -93,7 +98,7 @@ const cjs = require(resolve(dist, 'proctoring.cjs'));
 check('require() returns the namespace', () => assert.equal(typeof cjs.Proctor, 'function'));
 check('named exports survive CJS', () => {
   assert.equal(cjs.EVENTS.VIOLATION, 'violation');
-  assert.deepEqual([...cjs.DETECTOR_NAMES], ['tabs', 'camera', 'face', 'audio']);
+  assert.deepEqual([...cjs.DETECTOR_NAMES], ['tabs', 'rightClick', 'camera', 'face', 'audio']);
 });
 check('CommonJS and ESM expose identical keys', () => {
   const esmKeys = Object.keys(esm).filter((k) => k !== 'default').sort();
@@ -220,6 +225,8 @@ check('isVisualViolation defaults to camera and face only', () => {
   // An audio violation must not carry a webcam still — misleading evidence.
   assert.equal(isVisualViolation('audio-too-loud', 'audio', null), false);
   assert.equal(isVisualViolation('tab-hidden', 'tabs', null), false);
+  // Neither should a right-click: a webcam frame proves nothing about a mouse.
+  assert.equal(isVisualViolation('right-click', 'rightClick', null), false);
 });
 
 check('isVisualViolation honours an explicit allow-list', () => {
@@ -508,6 +515,203 @@ check('_sample is a no-op before the analyser exists', () => {
   const detector = new AudioDetector({ rmsThreshold: 0.08, fftSize: 1024 }, context);
   // Must not throw when called before init().
   detector._sample();
+});
+
+// ---------------------------------------------------------------------------
+group('right-click decision logic');
+
+/**
+ * Drives RightClickDetector's handlers with plain event objects.
+ *
+ * Node has no DOM, and `init()` would need a real `document` — but the decision
+ * rules (which signals count, how a gesture is deduplicated, when the menu is
+ * suppressed) are all reachable through the handlers, so they are tested here.
+ * That the listeners are actually wired to real DOM events is proved separately
+ * in verify-browser.mjs, against a real right-click.
+ */
+function makeRightClickHarness(overrides = {}) {
+  const violations = [];
+  const states = [];
+  const config = {
+    block: false,
+    detectPointerDown: true,
+    dedupeMs: 400,
+    throttleMs: 0,
+    captureTarget: true,
+    ...overrides,
+  };
+  const context = {
+    options: {},
+    report: (type, details, meta) => violations.push({ type, details, ...meta }),
+    log: () => {},
+    emit: () => {},
+    setState: (name, state) => states.push({ name, state }),
+  };
+  return { detector: new RightClickDetector(config, context), violations, states };
+}
+
+/** A secondary-button pointer event, with a `preventDefault` we can observe. */
+const rightButtonEvent = (target = null, extra = {}) => ({
+  button: 2,
+  clientX: 120.4,
+  clientY: 300.6,
+  target,
+  defaultPrevented: false,
+  preventDefault() {
+    this.defaultPrevented = true;
+  },
+  ...extra,
+});
+
+const element = (tagName, id = '', className = '') => ({ nodeType: 1, tagName, id, className });
+
+check('a contextmenu event produces a right-click violation', () => {
+  const { detector, violations } = makeRightClickHarness();
+  detector._handleContextMenu(rightButtonEvent(element('BUTTON', 'submit', 'primary big')));
+  assert.equal(violations.length, 1);
+  assert.equal(violations[0].type, 'right-click');
+  assert.equal(violations[0].detector, 'rightClick');
+  assert.equal(violations[0].details.source, 'contextmenu');
+});
+
+check('the violation records where the click landed', () => {
+  const { detector, violations } = makeRightClickHarness();
+  detector._handleContextMenu(rightButtonEvent(element('BUTTON', 'submit', 'primary big')));
+  assert.equal(violations[0].details.target, 'button#submit.primary.big');
+  assert.equal(violations[0].details.x, 120, 'coordinates must be rounded integers');
+  assert.equal(violations[0].details.y, 301);
+});
+
+check('captureTarget: false omits the element', () => {
+  const { detector, violations } = makeRightClickHarness({ captureTarget: false });
+  detector._handleContextMenu(rightButtonEvent(element('BUTTON', 'submit')));
+  assert.equal(violations[0].details.target, null);
+});
+
+check('an SVG target does not leak an object into the report', () => {
+  const { detector, violations } = makeRightClickHarness();
+  // SVG elements expose className as an SVGAnimatedString, not a string.
+  detector._handleContextMenu(
+    rightButtonEvent({ nodeType: 1, tagName: 'svg', id: 'chart', className: { baseVal: 'icon' } })
+  );
+  assert.equal(violations[0].details.target, 'svg#chart');
+});
+
+check('a click on the page background is described as the document', () => {
+  const { detector, violations } = makeRightClickHarness();
+  detector._handleContextMenu(rightButtonEvent({ nodeType: 9 }));
+  assert.equal(violations[0].details.target, 'document');
+});
+
+check('a secondary-button pointerdown also reports', () => {
+  const { detector, violations } = makeRightClickHarness();
+  detector._handlePointerDown(rightButtonEvent());
+  assert.equal(violations.length, 1);
+  assert.equal(violations[0].details.source, 'pointerdown');
+});
+
+check('a left click is ignored', () => {
+  const { detector, violations } = makeRightClickHarness();
+  detector._handlePointerDown(rightButtonEvent(null, { button: 0 }));
+  // A wheel/middle click, and an event with no button at all, must be silent too.
+  detector._handlePointerDown(rightButtonEvent(null, { button: 1 }));
+  detector._handlePointerDown({});
+  assert.deepEqual(violations, [], 'only the secondary button may fire');
+});
+
+check('one gesture reports once, not twice', () => {
+  // A real right-click produces pointerdown *and* contextmenu. The pair must
+  // collapse into a single violation — and with `throttleMs: 0`, so that the
+  // result cannot be an accident of the rate limit. This exact case produced two
+  // violations until dedupe was given its own rule.
+  const { detector, violations } = makeRightClickHarness({ throttleMs: 0 });
+  detector._handlePointerDown(rightButtonEvent());
+  detector._handleContextMenu(rightButtonEvent());
+  assert.equal(violations.length, 1, 'the pointerdown/contextmenu pair must be deduplicated');
+  assert.equal(violations[0].details.source, 'pointerdown', 'the earlier signal wins');
+});
+
+check('a stale pointerdown does not swallow a later menu key', () => {
+  const { detector, violations } = makeRightClickHarness({ dedupeMs: 400 });
+  detector._handlePointerDown(rightButtonEvent());
+  // Simulate the next gesture arriving well after the dedupe window.
+  detector._lastPointerDownAt = Date.now() - 5_000;
+  detector._handleContextMenu(rightButtonEvent(null, { button: 0 }));
+  assert.equal(violations.length, 2, 'a separate gesture must still be reported');
+  assert.equal(violations[1].details.source, 'contextmenu');
+});
+
+check('the dedupe window is consumed, not sticky', () => {
+  const { detector, violations } = makeRightClickHarness({ dedupeMs: 400, throttleMs: 0 });
+  detector._handlePointerDown(rightButtonEvent());
+  detector._handleContextMenu(rightButtonEvent()); // the same gesture — dropped
+  detector._handleContextMenu(rightButtonEvent()); // the keyboard Menu key — reported
+  assert.equal(violations.length, 2, 'the window must be cleared after the duplicate');
+  assert.equal(violations[1].details.source, 'contextmenu');
+});
+
+check('with pointerdown off, contextmenu is the only source', () => {
+  const { detector, violations } = makeRightClickHarness({ detectPointerDown: false });
+  detector._handleContextMenu(rightButtonEvent());
+  assert.equal(violations.length, 1);
+  assert.equal(violations[0].details.source, 'contextmenu');
+});
+
+check('a second gesture after the throttle window reports again', () => {
+  const { detector, violations } = makeRightClickHarness({ throttleMs: 0 });
+  detector._handleContextMenu(rightButtonEvent());
+  detector._handleContextMenu(rightButtonEvent());
+  assert.equal(violations.length, 2, 'a repeated right-click must not be swallowed forever');
+});
+
+check('throttleMs caps a right-click spammer', () => {
+  const { detector, violations } = makeRightClickHarness({ throttleMs: 60_000 });
+  for (let i = 0; i < 5; i += 1) detector._handleContextMenu(rightButtonEvent());
+  assert.equal(violations.length, 1, 'the rate limit must hold regardless of dedupe');
+});
+
+check('block: true suppresses the menu and says so', () => {
+  const { detector, violations } = makeRightClickHarness({ block: true });
+  const event = rightButtonEvent();
+  detector._handleContextMenu(event);
+  assert.equal(event.defaultPrevented, true, 'the context menu must be prevented');
+  assert.equal(violations[0].details.blocked, true);
+});
+
+check('block: false never touches the page', () => {
+  const { detector } = makeRightClickHarness();
+  const event = rightButtonEvent();
+  detector._handleContextMenu(event);
+  assert.equal(event.defaultPrevented, false, 'a library must not block the menu by default');
+});
+
+check('blocking survives a throttled report', () => {
+  // The report is rate-limited, but the menu must be suppressed every time —
+  // otherwise a second right-click would silently open it.
+  const { detector, violations } = makeRightClickHarness({ block: true, throttleMs: 60_000 });
+  const first = rightButtonEvent();
+  const second = rightButtonEvent();
+  detector._handleContextMenu(first);
+  detector._handleContextMenu(second);
+  assert.equal(violations.length, 1, 'the second report must be throttled away');
+  assert.equal(second.defaultPrevented, true, 'the second menu must still be suppressed');
+});
+
+check('the detector publishes a state for the host UI', () => {
+  const { detector, states } = makeRightClickHarness();
+  detector._handleContextMenu(rightButtonEvent());
+  const last = states.at(-1);
+  assert.equal(last.name, 'rightClick');
+  assert.equal(last.state.status, 'violation');
+  assert.equal(last.state.count, 1);
+  assert.equal(detector.getState().count, 1);
+});
+
+check('destroy() before init() is safe', () => {
+  // Nothing was registered, so teardown must not reach for a document.
+  const { detector } = makeRightClickHarness();
+  detector.destroy();
+  assert.equal(detector.getState().active, false);
 });
 
 // ---------------------------------------------------------------------------
