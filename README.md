@@ -650,10 +650,10 @@ not as proof.
 npm install
 npm run dev              # demo page at http://localhost:5173/demo.html
 npm run build            # emits dist/proctoring.js, .cjs, .umd.js + index.d.ts
-npm test                 # build + 97 checks against the built artifact
+npm test                 # build + 102 checks against the built artifact
 ```
 
-Five suites, 166 checks in total:
+Five suites, 171 checks in total:
 
 | Command | Checks | What it proves |
 |---|---|---|
@@ -665,6 +665,11 @@ Five suites, 166 checks in total:
 
 `npm test` runs against `dist/`, not `src/`, so a build regression (a missing
 export, broken CJS interop) fails here rather than in a consumer's app.
+
+`npm run verify:all` chains the first four. `verify:static` is deliberately left
+out: it loads the demo's pinned CDN bundle, so it can only pass *after* that
+version is published — chaining it would make `verify:all` fail on every
+pre-release run. Run it as the last step of a release instead.
 
 `verify:static` also accepts a deployed URL, so a deploy can be checked rather
 than assumed:
