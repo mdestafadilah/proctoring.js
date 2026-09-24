@@ -12,8 +12,9 @@ src/
 vite.config.js
 demo.html
 
-# Frozen Preact prototype, kept for the record only. `files` already excludes
-# it; listed here so loosening `files` cannot accidentally publish a dead app.
+# Frozen vanilla-JS prototype, kept for the record only. `files` already
+# excludes it; listed here so loosening `files` cannot accidentally publish a
+# dead app.
 legacy/
 
 # Static demo site and its tooling — hosted separately, not part of the package
