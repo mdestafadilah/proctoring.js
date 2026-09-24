@@ -5,9 +5,10 @@
  * DOM events and produce violations. Focused on `tabs`, which is the only
  * detector enabled by default and the one every consumer gets.
  *
- * Run headful-free via Edge + CDP. See the windows-edge-cdp-ui-verify skill.
+ * Run headful-free via Edge + CDP. The driver is vendored at ./lib/cdp.mjs.
  */
-import { launchEdge } from 'file:///C:/Users/asus/.workbuddy-ai/skills/windows-edge-cdp-ui-verify/scripts/cdp.mjs';
+import { launchEdge } from './lib/cdp.mjs';
+import { version } from './lib/pkg.mjs';
 import { strict as assert } from 'node:assert';
 import { mkdirSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
@@ -63,7 +64,7 @@ try {
 
   assert.equal(api.hasProctor, true, 'Proctor must be exported');
   assert.deepEqual(api.detectors, ['tabs', 'rightClick', 'shortcuts', 'camera', 'face', 'audio']);
-  assert.equal(api.version, '0.3.1');
+  assert.equal(api.version, version);
   assert.ok(api.modelUrl.startsWith('https://cdn.jsdelivr.net/'), 'model URL must be a CDN URL');
   ok(`module loads in browser (${api.keys.length} exports, v${api.version})`);
 

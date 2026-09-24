@@ -15,7 +15,8 @@
  *   python -m http.server 5199 --bind 127.0.0.1     # from the repo root
  *   bun scripts/verify-umd.mjs
  */
-import { launchEdge } from 'file:///C:/Users/asus/.workbuddy-ai/skills/windows-edge-cdp-ui-verify/scripts/cdp.mjs';
+import { launchEdge } from './lib/cdp.mjs';
+import { version } from './lib/pkg.mjs';
 import { strict as assert } from 'node:assert';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
@@ -52,7 +53,7 @@ try {
   ok('window.Proctoring is defined after a plain <script src>');
 
   assert.equal(result.globalName, 'Proctoring');
-  assert.equal(result.version, '0.3.1');
+  assert.equal(result.version, version);
   ok(`global is named "Proctoring" and exposes version ${result.version}`);
 
   assert.equal(result.hasProctor, true, 'Proctor class must be on the global');

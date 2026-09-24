@@ -11,7 +11,8 @@
  *
  *   bun scripts/verify-static-demo.mjs
  */
-import { launchEdge } from 'file:///C:/Users/asus/.workbuddy-ai/skills/windows-edge-cdp-ui-verify/scripts/cdp.mjs';
+import { launchEdge } from './lib/cdp.mjs';
+import { version } from './lib/pkg.mjs';
 import { strict as assert } from 'node:assert';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
@@ -95,14 +96,17 @@ try {
   })()`);
 
   assert.equal(load.hasGlobal, true, 'window.Proctoring must be defined');
-  assert.equal(load.version, '0.3.1', `unexpected version: ${load.version}`);
-  assert.equal(load.badge, 'v0.3.1');
+  assert.equal(load.version, version, `unexpected version: ${load.version}`);
+  assert.equal(load.badge, `v${version}`);
   assert.deepEqual(load.detectors, ['tabs', 'rightClick', 'shortcuts', 'camera', 'face', 'audio']);
   ok(`UMD dari jsDelivr dimuat (window.Proctoring v${load.version})`);
 
   assert.equal(load.cdnScript.length, 1, 'the demo must load exactly one CDN script');
+  // The demo must pin the current release, not merely some version: a demo left
+  // on the previous pin would still load, and would quietly stop proving that
+  // the published bundle works.
   assert.ok(
-    load.cdnScript[0].includes('proctoring.js@0.3.1'),
+    load.cdnScript[0].includes(`proctoring.js@${version}`),
     `unexpected CDN URL: ${load.cdnScript[0]}`
   );
   ok('skrip dimuat dari URL jsDelivr yang di-pin ke versi terbit');

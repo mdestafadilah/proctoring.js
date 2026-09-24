@@ -637,6 +637,16 @@ npm run verify:face                       # downloads ~2MB of models
 They launch Edge with `--use-fake-device-for-media-stream`, so the camera and
 audio checks run with no physical hardware and no permission prompt.
 
+The CDP driver is vendored at [`scripts/lib/cdp.mjs`](./scripts/lib/cdp.mjs) — a
+dependency-free copy, so the suites run on any clone without installing a
+browser-automation stack. It is Windows-only: it looks for `msedge.exe` in the
+two standard install locations and speaks DevTools Protocol over a WebSocket.
+Set `edgePath` if Edge lives elsewhere.
+
+The release version is read from `package.json` by
+[`scripts/lib/pkg.mjs`](./scripts/lib/pkg.mjs), so bumping the version is a
+one-line change plus the pin in `netlify-demo/index.html`.
+
 Two deliberate testing choices worth knowing:
 
 - **Detector decision rules are unit-tested with synthetic input**, not through

@@ -15,7 +15,7 @@
  *
  *   bun scripts/verify-face.mjs
  */
-import { launchEdge } from 'file:///C:/Users/asus/.workbuddy-ai/skills/windows-edge-cdp-ui-verify/scripts/cdp.mjs';
+import { launchEdge } from './lib/cdp.mjs';
 import { strict as assert } from 'node:assert';
 
 const BASE = 'http://localhost:5180';
