@@ -738,7 +738,7 @@ run.
 | `netlify-demo/` | The static demo site, hosted separately at `proctoring-js-demo.netlify.app`. |
 | `demo.html` | The richer demo page served by `npm run dev`. |
 | `models/` | Local face-api weights for the `module` and `custom` providers (~18 MB). Tracked for convenience, excluded from the tarball. |
-| `legacy/` | Frozen snapshot of the original Preact prototype this project replaced. Not built, not tested, not published — see [`legacy/README.md`](./legacy/README.md). |
+| `legacy/` | Frozen snapshot of the first prototype — the plain vanilla-JS app this library was rewritten from, one `modules/*.js` file per detector idea. Not built, not tested, not published — see [`legacy/README.md`](./legacy/README.md). |
 
 ### Environment variables
 
