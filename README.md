@@ -3,6 +3,9 @@
 Zero-dependency browser proctoring toolkit. Detects tab switching, camera
 tampering, missing or extra faces, and room noise — through one small event API.
 
+**[Live demo](https://proctoring-js-demo.netlify.app)** ·
+**[npm](https://www.npmjs.com/package/proctoring.js)**
+
 ```bash
 npm install proctoring.js
 ```
@@ -363,6 +366,14 @@ face: {
 
 The UMD build exposes the namespace as `window.Proctoring`.
 
+A complete, self-contained example lives in [`netlify-demo/index.html`](./netlify-demo/index.html)
+— one HTML file, no build step, loading the published bundle from jsDelivr. It is
+deployed at https://proctoring-js-demo.netlify.app.
+
+```bash
+npm run deploy:demo    # redeploy netlify-demo/ to Netlify
+```
+
 ---
 
 ## Browser support
@@ -417,9 +428,17 @@ Four suites, 93 checks in total:
 | `npm run verify:browser` | 23 | Real Edge: tab switch, camera stream, audio sampler, teardown, screenshots |
 | `npm run verify:umd` | 6 | The `<script src>` path via a plain static server |
 | `npm run verify:face` | 7 | face-api CDN + weights resolve and inference runs |
+| `npm run verify:static` | 8 | The deployed demo shape: one HTML file + the published CDN bundle |
 
 `npm test` runs against `dist/`, not `src/`, so a build regression (a missing
 export, broken CJS interop) fails here rather than in a consumer's app.
+
+`verify:static` also accepts a deployed URL, so a deploy can be checked rather
+than assumed:
+
+```bash
+DEMO_URL=https://proctoring-js-demo.netlify.app npm run verify:static
+```
 
 The browser suites drive real Edge over CDP. They need Bun and a dev server:
 

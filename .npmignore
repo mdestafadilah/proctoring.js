@@ -12,6 +12,10 @@ src/
 vite.config.js
 demo.html
 
+# Static demo site and its tooling — hosted separately, not part of the package
+netlify-demo/
+scripts/
+
 # Tooling and CI
 .github/
 .vscode/

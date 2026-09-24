@@ -60,7 +60,9 @@
     "verify:browser": "bun scripts/verify-browser.mjs",
     "verify:umd": "bun scripts/verify-umd.mjs",
     "verify:face": "bun scripts/verify-face.mjs",
+    "verify:static": "bun scripts/verify-static-demo.mjs",
     "verify:all": "npm run verify && npm run verify:browser && npm run verify:umd && npm run verify:face",
+    "deploy:demo": "node scripts/deploy-netlify.mjs netlify-demo proctoring-js-demo",
     "test": "npm run build && npm run verify",
     "prepublishOnly": "npm test"
   },
