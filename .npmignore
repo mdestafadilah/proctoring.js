@@ -21,6 +21,11 @@ legacy/
 netlify-demo/
 scripts/
 
+# Maintainer notes. Not a secret, but publishing it would change the tarball for
+# no consumer benefit — and the README-parity rule in CONTRIBUTING.md only holds
+# as long as the tarball contents stay exactly as `files` declares them.
+CONTRIBUTING.md
+
 # Tooling and CI
 .github/
 .vscode/
