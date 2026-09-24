@@ -5,13 +5,13 @@
   "type": "module",
   "license": "MIT",
   "author": "mdestafadilah <desta.08b@gmail.com>",
-  "homepage": "https://github.com/mdestafadilah/proctoring.js-catalyst#readme",
+  "homepage": "https://github.com/mdestafadilah/proctoring.js#readme",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/mdestafadilah/proctoring.js-catalyst.git"
+    "url": "git+https://github.com/mdestafadilah/proctoring.js.git"
   },
   "bugs": {
-    "url": "https://github.com/mdestafadilah/proctoring.js-catalyst/issues"
+    "url": "https://github.com/mdestafadilah/proctoring.js/issues"
   },
   "keywords": [
     "proctoring",

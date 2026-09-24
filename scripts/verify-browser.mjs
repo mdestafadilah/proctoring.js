@@ -9,9 +9,18 @@
  */
 import { launchEdge } from 'file:///C:/Users/asus/.workbuddy-ai/skills/windows-edge-cdp-ui-verify/scripts/cdp.mjs';
 import { strict as assert } from 'node:assert';
+import { mkdirSync } from 'node:fs';
+import { dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 const BASE = 'http://localhost:5180';
 const passed = [];
+
+// Derived from this file rather than hardcoded, so the script works from any
+// checkout. `outputs/` is gitignored, so a fresh clone has no such directory and
+// the run would otherwise die on its very last step.
+const OUT_DIR = resolve(dirname(fileURLToPath(import.meta.url)), '..', 'outputs');
+mkdirSync(OUT_DIR, { recursive: true });
 
 function ok(label) {
   passed.push(label);
@@ -873,7 +882,7 @@ try {
   assert.deepEqual(realErrors, [], `unexpected console errors: ${JSON.stringify(realErrors)}`);
   ok('console is clean');
 
-  await page.screenshot('D:/REACT-DEV/proctoring.js-catalyst/outputs/verify-demo.png');
+  await page.screenshot(resolve(OUT_DIR, 'verify-demo.png'));
 
   console.log(`\nAll ${passed.length} browser checks passed.`);
 } finally {
