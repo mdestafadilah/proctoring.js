@@ -35,6 +35,11 @@ export {
 export { CameraDetector } from './detectors/camera.js';
 export { FaceDetector } from './detectors/face.js';
 export { AudioDetector, computeRms, computeSpectralDensity } from './detectors/audio.js';
+export {
+  ThirdPartyDetector,
+  KNOWN_THIRD_PARTY_DEVICES,
+  matchThirdPartyDevice,
+} from './detectors/third-party.js';
 
 export {
   FACE_API_VERSION,
@@ -62,4 +67,4 @@ export {
 
 export { isBrowser, isSecureContext, mergeOptions, throttle, every, uid, clamp } from './core/utils.js';
 
-export const version = '0.3.4';
+export const version = '0.4.0';

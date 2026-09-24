@@ -57,7 +57,7 @@ try {
   ok(`global is named "Proctoring" and exposes version ${result.version}`);
 
   assert.equal(result.hasProctor, true, 'Proctor class must be on the global');
-  assert.deepEqual(result.detectors, ['tabs', 'rightClick', 'shortcuts', 'camera', 'face', 'audio']);
+  assert.deepEqual(result.detectors, ['tabs', 'rightClick', 'shortcuts', 'camera', 'face', 'audio', 'thirdParty']);
   ok('Proctor class and every detector are reachable');
 
   assert.equal(result.eventSample, 'violation');

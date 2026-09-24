@@ -129,6 +129,7 @@
           <label class="toggle"><input type="checkbox" id="optCamera" checked /> camera</label>
           <label class="toggle"><input type="checkbox" id="optFace" /> face</label>
           <label class="toggle"><input type="checkbox" id="optAudio" /> audio</label>
+          <label class="toggle"><input type="checkbox" id="optThirdParty" /> thirdParty</label>
           <label class="toggle"><input type="checkbox" id="optShots" /> screenshots</label>
           <label class="toggle"><input type="checkbox" id="optBackend" /> backend (mock)</label>
         </div>
@@ -210,6 +211,9 @@
           },
           face: { enabled: $('optFace').checked },
           audio: { enabled: $('optAudio').checked },
+          // Third-party capture software. The "active camera is virtual" check
+          // needs the camera on; the device scan works either way.
+          thirdParty: { enabled: $('optThirdParty').checked },
           report: {
             // Attach a downscaled webcam frame to camera/face violations.
             captureScreenshots: $('optShots').checked,

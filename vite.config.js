@@ -78,7 +78,10 @@ export type ViolationType =
   | 'face-multiple'
   | 'face-looking-away'
   | 'audio-too-loud'
-  | 'audio-multiple-voices';
+  | 'audio-multiple-voices'
+  | 'third-party-device'
+  | 'virtual-camera-active'
+  | 'screen-share-started';
 
 export interface Violation<TDetails = Record<string, unknown>> {
   id: string;
@@ -193,6 +196,20 @@ export interface AudioOptions {
   throttleMs?: number;
 }
 
+export interface ThirdPartyOptions {
+  enabled?: boolean;
+  detectVirtualDevices?: boolean;
+  detectActiveCamera?: boolean;
+  detectScreenShare?: boolean;
+  /** Extra lowercase substrings to treat as third-party capture tools. */
+  devices?: string[] | null;
+  /** Lowercase substrings that suppress a match — for known-good lab hardware. */
+  ignore?: string[] | null;
+  scanIntervalMs?: number;
+  checkIntervalMs?: number;
+  throttleMs?: number;
+}
+
 export interface BackendOptions {
   enabled?: boolean;
   endpoint?: string | null;
@@ -227,6 +244,7 @@ export interface ProctorOptions {
   camera?: CameraOptions;
   face?: FaceOptions;
   audio?: AudioOptions;
+  thirdParty?: ThirdPartyOptions;
   backend?: BackendOptions;
   report?: ReportOptions;
   logLevel?: LogLevel;
@@ -307,6 +325,15 @@ export declare function worstSeverityOf(violations: Violation[]): Severity | 'no
 export declare function formatDuration(ms: number): string;
 export declare function computeRms(buffer: Float32Array): number;
 export declare function computeSpectralDensity(freqData: Uint8Array, floor?: number): number;
+
+/** Device labels of software known to install a synthetic capture device. */
+export declare const KNOWN_THIRD_PARTY_DEVICES: readonly string[];
+
+/** The pattern that matched, or null when the label looks like real hardware. */
+export declare function matchThirdPartyDevice(
+  label: string,
+  options?: { extra?: string[] | null; ignore?: string[] | null }
+): { pattern: string; label: string } | null;
 
 export interface ScreenshotOptions {
   maxWidth?: number;

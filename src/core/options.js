@@ -42,6 +42,9 @@ export const VIOLATION_TYPES = Object.freeze({
   FACE_LOOKING_AWAY: 'face-looking-away',
   AUDIO_TOO_LOUD: 'audio-too-loud',
   AUDIO_MULTIPLE_VOICES: 'audio-multiple-voices',
+  THIRD_PARTY_DEVICE: 'third-party-device',
+  VIRTUAL_CAMERA_ACTIVE: 'virtual-camera-active',
+  SCREEN_SHARE_STARTED: 'screen-share-started',
 });
 
 /** Severity levels, ordered from least to most severe. */
@@ -75,6 +78,13 @@ export const DEFAULT_SEVERITY = Object.freeze({
   [VIOLATION_TYPES.FACE_LOOKING_AWAY]: SEVERITY.LOW,
   [VIOLATION_TYPES.AUDIO_TOO_LOUD]: SEVERITY.LOW,
   [VIOLATION_TYPES.AUDIO_MULTIPLE_VOICES]: SEVERITY.MEDIUM,
+  /**
+   * Merely *installed* is medium: a virtual camera on the machine is a
+   * capability, not yet an act. Actually being used is high, below.
+   */
+  [VIOLATION_TYPES.THIRD_PARTY_DEVICE]: SEVERITY.MEDIUM,
+  [VIOLATION_TYPES.VIRTUAL_CAMERA_ACTIVE]: SEVERITY.HIGH,
+  [VIOLATION_TYPES.SCREEN_SHARE_STARTED]: SEVERITY.HIGH,
 });
 
 export function severityWeight(severity) {
@@ -242,6 +252,62 @@ export const DEFAULT_OPTIONS = {
      */
     detectMultipleVoices: false,
     throttleMs: 3000,
+  },
+
+  /**
+   * Emit `violation` for third-party screen-sharing / streaming / remote-access
+   * software, as far as a web page can see it at all.
+   *
+   * What this can and cannot do, stated plainly because the name oversells it
+   * otherwise:
+   *
+   *  - It **cannot** see that TeamViewer, AnyDesk, Zoom or Discord are running.
+   *    No web API exposes other processes, and nothing about a remote-desktop
+   *    session is visible to page script. A detector that claimed otherwise
+   *    would be guessing.
+   *  - It **can** see the *synthetic capture devices* those tools install —
+   *    `OBS Virtual Camera`, `ManyCam`, `VB-Audio Virtual Cable`, … — because
+   *    `enumerateDevices()` lists them. That is a real, checkable signal, and
+   *    it is the main thing this detector is for.
+   *  - It **can** see whether the camera actually in use is one of those
+   *    virtual devices, or is a screen capture wearing a camera's label.
+   *  - It **can** see a screen share started *by this page*, because
+   *    `getDisplayMedia` is observable. A share started from another
+   *    application is not.
+   *
+   * Off by default: it is most useful alongside `camera`, and the device scan
+   * only sees anything once camera/microphone permission has been granted (see
+   * `detectVirtualDevices`).
+   */
+  thirdParty: {
+    enabled: false,
+    /**
+     * Scan `enumerateDevices()` for known virtual/loopback devices, and rescan
+     * on `devicechange` so plugging OBS in mid-exam is caught.
+     *
+     * Caveat that matters: browsers blank out `label` until the user has
+     * granted access to that kind at least once. With no permission the scan
+     * runs but sees nothing, which is why it logs when it comes back empty
+     * rather than pretending the machine is clean.
+     */
+    detectVirtualDevices: true,
+    /**
+     * Report when the *live* camera is a virtual device, or is a screen capture
+     * instead of a camera. Needs `camera.enabled`; reads that detector's track
+     * rather than opening a second stream.
+     */
+    detectActiveCamera: true,
+    /** Observe `getDisplayMedia` so a page-initiated screen share is recorded. */
+    detectScreenShare: true,
+    /** Extra lowercase substrings to treat as third-party, on top of the built-ins. */
+    devices: null,
+    /** Lowercase substrings that suppress a match — for known-good lab hardware. */
+    ignore: null,
+    /** Cadence for the device rescan, in ms. 0 disables the timer (event-only). */
+    scanIntervalMs: 15000,
+    /** Cadence for the active-camera check, in ms. */
+    checkIntervalMs: 3000,
+    throttleMs: 2000,
   },
 
   /** Deliver violations to an HTTP endpoint via fetch. Off by default. */

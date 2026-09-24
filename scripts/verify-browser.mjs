@@ -63,7 +63,7 @@ try {
   })()`);
 
   assert.equal(api.hasProctor, true, 'Proctor must be exported');
-  assert.deepEqual(api.detectors, ['tabs', 'rightClick', 'shortcuts', 'camera', 'face', 'audio']);
+  assert.deepEqual(api.detectors, ['tabs', 'rightClick', 'shortcuts', 'camera', 'face', 'audio', 'thirdParty']);
   assert.equal(api.version, version);
   assert.ok(api.modelUrl.startsWith('https://cdn.jsdelivr.net/'), 'model URL must be a CDN URL');
   ok(`module loads in browser (${api.keys.length} exports, v${api.version})`);
@@ -873,7 +873,135 @@ try {
   ok('block:true leaves unrelated keystrokes alone');
 
   // ---------------------------------------------------------------------
-  // 10. No console noise.
+  // 10. Third-party capture software.
+  //
+  //     This machine has no OBS installed, so the honest result of a scan is
+  //     silence — and that is asserted, because a detector that fires on a
+  //     clean machine is worse than no detector. The scan -> match -> report
+  //     path is then proved by declaring the browser's *own* fake device label
+  //     as a pattern, which exercises the real enumerateDevices() output
+  //     without needing third-party software on the box.
+  // ---------------------------------------------------------------------
+  console.log('\nBrowser: third-party capture software');
+
+  const helper = await page.evaluate(`(async () => {
+    const { matchThirdPartyDevice, KNOWN_THIRD_PARTY_DEVICES } = await import('/src/index.js');
+    return {
+      hit: matchThirdPartyDevice('OBS Virtual Camera'),
+      miss: matchThirdPartyDevice('Integrated Camera'),
+      empty: matchThirdPartyDevice(''),
+      count: KNOWN_THIRD_PARTY_DEVICES.length,
+    };
+  })()`);
+
+  assert.equal(helper.hit?.pattern, 'obs virtual camera');
+  assert.equal(helper.miss, null, 'real hardware must not be flagged');
+  assert.equal(helper.empty, null, 'an empty label must never match everything');
+  assert.ok(helper.count >= 20, 'the shipped device list must be real');
+  ok(`the matcher and its ${helper.count}-entry device list ship in the browser build`);
+
+  const scan = await page.evaluate(`(async () => {
+    const { Proctor } = await import('/src/index.js');
+
+    // Readable labels require permission, exactly as a proctored page would have
+    // obtained through its camera detector.
+    let granted = false;
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+      granted = true;
+      for (const track of stream.getTracks()) track.stop();
+    } catch (err) {
+      return { granted: false, message: String(err) };
+    }
+
+    const devices = await navigator.mediaDevices.enumerateDevices();
+    const labelled = devices.filter((d) => d.label);
+    const probe = labelled.find((d) => d.kind === 'videoinput');
+
+    const proctor = new Proctor({
+      logLevel: 'silent',
+      report: { persist: false },
+      thirdParty: {
+        enabled: true,
+        detectActiveCamera: false,
+        scanIntervalMs: 0,
+        devices: probe ? [probe.label] : null,
+      },
+    });
+
+    const events = [];
+    proctor.on('violation', (v) => events.push(v));
+    await proctor.start();
+
+    const state = proctor.getDetectorState('thirdParty');
+    const report = proctor.getReport();
+    proctor.destroy();
+
+    return {
+      granted,
+      labelledCount: labelled.length,
+      probeLabel: probe ? probe.label : null,
+      events,
+      state,
+      total: report.total,
+    };
+  })()`);
+
+  assert.equal(scan.granted, true, `fake device must be grantable: ${scan.message ?? ''}`);
+  assert.ok(scan.labelledCount > 0, 'labels must be readable once permission is granted');
+  assert.equal(scan.state?.status, 'running', 'the detector must reach a running state');
+
+  const reported = scan.events.filter((v) => v.details?.device === scan.probeLabel);
+  assert.equal(
+    reported.length,
+    1,
+    `the declared pattern must be reported exactly once, got ${JSON.stringify(scan.events.map((v) => v.details))}`
+  );
+  assert.equal(reported[0].type, 'third-party-device');
+  assert.equal(reported[0].detector, 'thirdParty');
+  assert.ok(
+    scan.events.every((v) => v.type === 'third-party-device'),
+    'a clean machine must produce no other third-party violation'
+  );
+  ok(`a real enumerateDevices() scan reports a matched device (${scan.probeLabel})`);
+
+  const wrapper = await page.evaluate(`(async () => {
+    const { Proctor } = await import('/src/index.js');
+    const original = navigator.mediaDevices.getDisplayMedia;
+    const hadApi = typeof original === 'function';
+
+    const proctor = new Proctor({
+      logLevel: 'silent',
+      report: { persist: false },
+      // Screen-share observation only; the other two signals are proved above.
+      thirdParty: { enabled: true, detectVirtualDevices: false, detectActiveCamera: false },
+    });
+
+    await proctor.start();
+    const patched = navigator.mediaDevices.getDisplayMedia !== original;
+    const patchedIsCallable = typeof navigator.mediaDevices.getDisplayMedia === 'function';
+
+    proctor.destroy();
+    return {
+      hadApi,
+      patched,
+      patchedIsCallable,
+      restored: navigator.mediaDevices.getDisplayMedia === original,
+    };
+  })()`);
+
+  assert.equal(wrapper.hadApi, true, 'Edge must expose getDisplayMedia');
+  assert.equal(wrapper.patched, true, 'the wrapper must land on the real MediaDevices object');
+  assert.equal(wrapper.patchedIsCallable, true, 'and must still be callable');
+  assert.equal(
+    wrapper.restored,
+    true,
+    'destroy() must remove it — a permanent patch on a standard API is indistinguishable from a hijack'
+  );
+  ok('getDisplayMedia is wrapped while running, and restored on destroy');
+
+  // ---------------------------------------------------------------------
+  // 11. No console noise.
   // ---------------------------------------------------------------------
   console.log('\nBrowser: console');
   const realErrors = page.errors.filter(

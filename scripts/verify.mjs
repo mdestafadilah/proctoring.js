@@ -31,6 +31,20 @@ function group(name) {
   console.log(`\n${name}`);
 }
 
+/**
+ * Async sibling of `check`.
+ *
+ * Some decision logic is inherently asynchronous (`enumerateDevices()`, and the
+ * `getDisplayMedia` wrapper). A promise returned from `check` would settle
+ * *after* the check had already been counted as passing, so a genuine failure
+ * would surface as an unhandled rejection next to a green tick.
+ */
+async function checkAsync(label, fn) {
+  await fn();
+  passed += 1;
+  console.log(`  ok  ${label}`);
+}
+
 // ---------------------------------------------------------------------------
 group('ESM build');
 
@@ -61,6 +75,9 @@ const {
   DEVTOOLS_COMBOS,
   parseCombo,
   detectPlatform,
+  ThirdPartyDetector,
+  KNOWN_THIRD_PARTY_DEVICES,
+  matchThirdPartyDevice,
   version,
 } = esm;
 
@@ -71,7 +88,7 @@ check('version matches package.json', () => assert.equal(version, pkg.version));
 check('every detector is registered', () =>
   assert.deepEqual(
     [...DETECTOR_NAMES],
-    ['tabs', 'rightClick', 'shortcuts', 'camera', 'face', 'audio']
+    ['tabs', 'rightClick', 'shortcuts', 'camera', 'face', 'audio', 'thirdParty']
   ));
 check('the registry maps names to classes', () =>
   assert.equal(esm.DETECTORS.shortcuts, ShortcutsDetector));
@@ -85,6 +102,9 @@ check('violation type ids are the wire format', () => {
   assert.equal(VIOLATION_TYPES.FACE_MULTIPLE, 'face-multiple');
   assert.equal(VIOLATION_TYPES.RIGHT_CLICK, 'right-click');
   assert.equal(VIOLATION_TYPES.SHORTCUT_USED, 'shortcut-used');
+  assert.equal(VIOLATION_TYPES.THIRD_PARTY_DEVICE, 'third-party-device');
+  assert.equal(VIOLATION_TYPES.VIRTUAL_CAMERA_ACTIVE, 'virtual-camera-active');
+  assert.equal(VIOLATION_TYPES.SCREEN_SHARE_STARTED, 'screen-share-started');
 });
 check('only tabs is enabled by default', () => {
   assert.equal(DEFAULT_OPTIONS.tabs.enabled, true);
@@ -93,6 +113,7 @@ check('only tabs is enabled by default', () => {
   assert.equal(DEFAULT_OPTIONS.camera.enabled, false);
   assert.equal(DEFAULT_OPTIONS.face.enabled, false);
   assert.equal(DEFAULT_OPTIONS.audio.enabled, false);
+  assert.equal(DEFAULT_OPTIONS.thirdParty.enabled, false);
 });
 check('face CDN URL is pinned to the runtime version', () => {
   assert.ok(CDN_DEFAULTS.scriptUrl.includes(`@${FACE_API_VERSION}`));
@@ -110,7 +131,7 @@ check('named exports survive CJS', () => {
   assert.equal(cjs.EVENTS.VIOLATION, 'violation');
   assert.deepEqual(
     [...cjs.DETECTOR_NAMES],
-    ['tabs', 'rightClick', 'shortcuts', 'camera', 'face', 'audio']
+    ['tabs', 'rightClick', 'shortcuts', 'camera', 'face', 'audio', 'thirdParty']
   );
 });
 check('CommonJS and ESM expose identical keys', () => {
@@ -1018,6 +1039,402 @@ check('the detector publishes its active combos', () => {
 
 check('destroy() before init() is safe', () => {
   const { detector } = makeShortcutHarness();
+  detector.destroy();
+  assert.equal(detector.getState().active, false);
+});
+
+// ---------------------------------------------------------------------------
+group('third-party capture software');
+
+/**
+ * Drives ThirdPartyDetector without a DOM.
+ *
+ * `init()` wants `navigator.mediaDevices`, so the decision rules are exercised
+ * directly: the matching rules, the scan dedupe, the active-camera check and
+ * the screen-share wrapper. That the real browser APIs are actually wired up is
+ * proved separately in verify-browser.mjs.
+ */
+function makeThirdPartyHarness(overrides = {}, camera = null) {
+  const violations = [];
+  const logs = [];
+  const states = [];
+  const config = {
+    detectVirtualDevices: true,
+    detectActiveCamera: true,
+    detectScreenShare: true,
+    devices: null,
+    ignore: null,
+    scanIntervalMs: 0,
+    checkIntervalMs: 3000,
+    throttleMs: 0,
+    ...overrides,
+  };
+  const context = {
+    options: {},
+    report: (type, details, meta) => violations.push({ type, details, ...meta }),
+    log: (level, message, meta) => logs.push({ level, message, meta }),
+    emit: () => {},
+    setState: (name, state) => states.push({ name, state }),
+    getDetector: (name) => (name === 'camera' ? camera : null),
+  };
+  return { detector: new ThirdPartyDetector(config, context), violations, logs, states };
+}
+
+/**
+ * Install a fake `navigator.mediaDevices` for the duration of `fn`.
+ *
+ * `navigator` itself is created when the runtime does not ship one, so this
+ * suite never silently skips on an older Node.
+ */
+function withMediaDevices(media, fn) {
+  if (typeof globalThis.navigator === 'undefined') {
+    Object.defineProperty(globalThis, 'navigator', { value: {}, configurable: true, writable: true });
+  }
+  const had = Object.prototype.hasOwnProperty.call(globalThis.navigator, 'mediaDevices');
+  const previous = globalThis.navigator.mediaDevices;
+  Object.defineProperty(globalThis.navigator, 'mediaDevices', {
+    value: media,
+    configurable: true,
+    writable: true,
+  });
+  try {
+    return fn();
+  } finally {
+    if (had) {
+      Object.defineProperty(globalThis.navigator, 'mediaDevices', {
+        value: previous,
+        configurable: true,
+        writable: true,
+      });
+    } else {
+      delete globalThis.navigator.mediaDevices;
+    }
+  }
+}
+
+const mediaDevice = (kind, label, deviceId = 'd1') => ({ kind, label, deviceId, groupId: 'g1' });
+
+/** A camera detector stub whose only job is to hand back a live track. */
+const cameraWithTrack = (track) => ({ getStream: () => ({ getVideoTracks: () => [track] }) });
+
+const liveTrack = (label, settings = {}) => ({
+  label,
+  readyState: 'live',
+  getSettings: () => settings,
+});
+
+check('the built-in list is frozen and covers the common stacks', () => {
+  assert.ok(Object.isFrozen(KNOWN_THIRD_PARTY_DEVICES));
+  assert.ok(KNOWN_THIRD_PARTY_DEVICES.length >= 20, 'the list should be a real inventory');
+  for (const expected of ['obs virtual camera', 'manycam', 'vb-audio', 'blackhole']) {
+    assert.ok(KNOWN_THIRD_PARTY_DEVICES.includes(expected), `missing entry: ${expected}`);
+  }
+});
+
+check('real hardware is never flagged', () => {
+  assert.equal(matchThirdPartyDevice('Integrated Camera (04f2:b6d9)'), null);
+  assert.equal(matchThirdPartyDevice('HD Webcam'), null);
+  assert.equal(matchThirdPartyDevice('Microphone (Realtek(R) Audio)'), null);
+  assert.equal(matchThirdPartyDevice(''), null, 'an empty label must not match');
+  assert.equal(matchThirdPartyDevice(null), null);
+  assert.equal(matchThirdPartyDevice(undefined), null);
+  assert.equal(matchThirdPartyDevice(42), null);
+});
+
+check('matching is case-insensitive and tolerates vendor decoration', () => {
+  assert.equal(matchThirdPartyDevice('OBS Virtual Camera').pattern, 'obs virtual camera');
+  assert.equal(matchThirdPartyDevice('OBS Virtual Camera (OBS 30.1.2)').pattern, 'obs virtual camera');
+  assert.equal(matchThirdPartyDevice('  obs-camera  ').pattern, 'obs-camera');
+});
+
+check('a loopback audio cable is caught by device name', () => {
+  // Ordered specific-first, so the device is attributed rather than the vendor.
+  assert.equal(matchThirdPartyDevice('CABLE Output (VB-Audio Virtual Cable)').pattern, 'cable output');
+  assert.equal(matchThirdPartyDevice('BlackHole 2ch').pattern, 'blackhole');
+});
+
+check('the original label is echoed back, not the pattern', () => {
+  const match = matchThirdPartyDevice('ManyCam Virtual Webcam');
+  assert.equal(match.label, 'ManyCam Virtual Webcam');
+  assert.equal(match.pattern, 'manycam');
+});
+
+check('extra patterns extend the list and take precedence', () => {
+  const options = { extra: ['acme capture'] };
+  assert.equal(matchThirdPartyDevice('ACME Capture Device', options).pattern, 'acme capture');
+  // Built-ins still apply when nothing in `extra` matches.
+  assert.equal(matchThirdPartyDevice('ManyCam', options).pattern, 'manycam');
+});
+
+check('ignore silences a false positive without disabling the rest', () => {
+  const options = { ignore: ['obs virtual camera'] };
+  assert.equal(matchThirdPartyDevice('OBS Virtual Camera', options), null);
+  assert.equal(matchThirdPartyDevice('ManyCam', options).pattern, 'manycam');
+});
+
+await checkAsync('a scan reports a third-party device and its kind', async () => {
+  const { detector, violations } = makeThirdPartyHarness();
+  await withMediaDevices(
+    {
+      enumerateDevices: async () => [
+        mediaDevice('videoinput', 'Integrated Camera'),
+        mediaDevice('videoinput', 'OBS Virtual Camera'),
+      ],
+    },
+    () => detector.scan()
+  );
+
+  assert.equal(violations.length, 1, 'real hardware must not be reported');
+  assert.equal(violations[0].type, 'third-party-device');
+  assert.equal(violations[0].detector, 'thirdParty');
+  assert.equal(violations[0].details.device, 'OBS Virtual Camera');
+  assert.equal(violations[0].details.kind, 'camera');
+  assert.equal(violations[0].details.matched, 'obs virtual camera');
+});
+
+await checkAsync('the report carries no deviceId', async () => {
+  // A stable per-origin identifier adds nothing to the evidence and is one more
+  // thing to leak; the label already says which device it is.
+  const { detector, violations } = makeThirdPartyHarness();
+  await withMediaDevices(
+    { enumerateDevices: async () => [mediaDevice('videoinput', 'OBS Virtual Camera', 'secret-id')] },
+    () => detector.scan()
+  );
+  assert.equal(violations[0].details.deviceId, undefined);
+  assert.ok(!JSON.stringify(violations[0].details).includes('secret-id'));
+});
+
+await checkAsync('the same device is reported once across rescans', async () => {
+  const { detector, violations } = makeThirdPartyHarness();
+  const media = { enumerateDevices: async () => [mediaDevice('videoinput', 'OBS Virtual Camera')] };
+  await withMediaDevices(media, () => detector.scan());
+  await withMediaDevices(media, () => detector.scan());
+  await withMediaDevices(media, () => detector.scan());
+  assert.equal(violations.length, 1, 'a periodic rescan must not repeat the same device');
+});
+
+await checkAsync('two different devices are reported separately', async () => {
+  const { detector, violations } = makeThirdPartyHarness();
+  await withMediaDevices(
+    {
+      enumerateDevices: async () => [
+        mediaDevice('videoinput', 'OBS Virtual Camera'),
+        mediaDevice('audioinput', 'CABLE Output (VB-Audio Virtual Cable)'),
+      ],
+    },
+    () => detector.scan()
+  );
+  assert.equal(violations.length, 2);
+  assert.deepEqual(
+    violations.map((v) => v.details.kind),
+    ['camera', 'microphone']
+  );
+});
+
+await checkAsync('an all-blank device list is treated as blind, not clean', async () => {
+  const { detector, violations, logs } = makeThirdPartyHarness();
+  await withMediaDevices(
+    {
+      enumerateDevices: async () => [mediaDevice('videoinput', ''), mediaDevice('audioinput', '')],
+    },
+    () => detector.scan()
+  );
+
+  assert.deepEqual(violations, [], 'a blind scan must not invent violations');
+  const notice = logs.find((entry) => /permission/.test(entry.message));
+  assert.ok(notice, 'and it must say so, or the host reads the silence as a pass');
+  assert.equal(notice.level, 'debug');
+});
+
+await checkAsync('the blind-scan notice is logged once, not on every tick', async () => {
+  const { detector, logs } = makeThirdPartyHarness();
+  const media = { enumerateDevices: async () => [mediaDevice('videoinput', '')] };
+  await withMediaDevices(media, () => detector.scan());
+  await withMediaDevices(media, () => detector.scan());
+  assert.equal(logs.filter((entry) => /permission/.test(entry.message)).length, 1);
+});
+
+await checkAsync('a failing enumerateDevices degrades to a warning', async () => {
+  const { detector, violations, logs } = makeThirdPartyHarness();
+  await withMediaDevices(
+    {
+      enumerateDevices: async () => {
+        throw new Error('boom');
+      },
+    },
+    () => detector.scan()
+  );
+  assert.deepEqual(violations, []);
+  assert.ok(logs.some((entry) => entry.level === 'warn'), 'the failure must be visible');
+});
+
+await checkAsync('scan() after destroy() is a no-op', async () => {
+  const { detector, violations } = makeThirdPartyHarness();
+  detector.destroy();
+  await withMediaDevices(
+    { enumerateDevices: async () => [mediaDevice('videoinput', 'OBS Virtual Camera')] },
+    () => detector.scan()
+  );
+  assert.deepEqual(violations, []);
+});
+
+check('a virtual camera in use is reported', () => {
+  const { detector, violations } = makeThirdPartyHarness({}, cameraWithTrack(liveTrack('OBS Virtual Camera')));
+  detector._checkActiveCamera();
+  assert.equal(violations.length, 1);
+  assert.equal(violations[0].type, 'virtual-camera-active');
+  assert.equal(violations[0].detector, 'thirdParty');
+  assert.equal(violations[0].details.matched, 'obs virtual camera');
+});
+
+check('a real camera in use is silent', () => {
+  const camera = cameraWithTrack(liveTrack('Integrated Camera (04f2:b6d9)'));
+  const { detector, violations } = makeThirdPartyHarness({}, camera);
+  detector._checkActiveCamera();
+  assert.deepEqual(violations, []);
+});
+
+check('a virtual camera is reported once, not on every tick', () => {
+  const { detector, violations } = makeThirdPartyHarness({}, cameraWithTrack(liveTrack('OBS Virtual Camera')));
+  for (let i = 0; i < 5; i += 1) detector._checkActiveCamera();
+  assert.equal(violations.length, 1, 'it is a state, not a repeating event');
+});
+
+check('switching away and back reports again', () => {
+  const track = liveTrack('OBS Virtual Camera');
+  const { detector, violations } = makeThirdPartyHarness(
+    {},
+    { getStream: () => ({ getVideoTracks: () => [track] }) }
+  );
+  detector._checkActiveCamera();
+  track.label = 'Integrated Camera';
+  detector._checkActiveCamera();
+  track.label = 'OBS Virtual Camera';
+  detector._checkActiveCamera();
+  assert.equal(violations.length, 2, 'a supervisor needs to see the swap back');
+});
+
+check('a screen capture wearing a camera label is caught', () => {
+  // `displaySurface` is set only on tracks produced by getDisplayMedia, so its
+  // presence on the "webcam" means the feed is a shared screen.
+  const camera = cameraWithTrack(liveTrack('Screen 1', { displaySurface: 'monitor' }));
+  const { detector, violations } = makeThirdPartyHarness({}, camera);
+  detector._checkActiveCamera();
+
+  assert.equal(violations.length, 1);
+  assert.equal(violations[0].type, 'screen-share-started');
+  assert.equal(violations[0].details.source, 'camera-track');
+  assert.equal(violations[0].details.displaySurface, 'monitor');
+});
+
+check('an ended track is ignored', () => {
+  const track = liveTrack('OBS Virtual Camera');
+  track.readyState = 'ended';
+  const { detector, violations } = makeThirdPartyHarness({}, cameraWithTrack(track));
+  detector._checkActiveCamera();
+  assert.deepEqual(violations, []);
+});
+
+check('no camera detector means no crash', () => {
+  const { detector, violations } = makeThirdPartyHarness();
+  detector._checkActiveCamera();
+  assert.deepEqual(violations, []);
+});
+
+await checkAsync('a page screen share is observed and the stream still returned', async () => {
+  const { detector, violations } = makeThirdPartyHarness();
+  const stream = { getVideoTracks: () => [liveTrack('Entire Screen', { displaySurface: 'monitor' })] };
+  const media = { getDisplayMedia: async () => stream };
+
+  const returned = await withMediaDevices(media, () => {
+    detector._observeGetDisplayMedia();
+    return media.getDisplayMedia();
+  });
+
+  assert.equal(returned, stream, 'the wrapper must hand back the real stream');
+  assert.equal(violations.length, 1);
+  assert.equal(violations[0].type, 'screen-share-started');
+  assert.equal(violations[0].details.source, 'getDisplayMedia');
+  assert.equal(violations[0].details.displaySurface, 'monitor');
+});
+
+await checkAsync('a rejected getDisplayMedia stays rejected and is not reported', async () => {
+  const { detector, violations } = makeThirdPartyHarness();
+  const media = {
+    getDisplayMedia: async () => {
+      throw new Error('NotAllowedError');
+    },
+  };
+
+  let error = null;
+  await withMediaDevices(media, async () => {
+    detector._observeGetDisplayMedia();
+    try {
+      await media.getDisplayMedia();
+    } catch (err) {
+      error = err;
+    }
+  });
+
+  assert.ok(error && /NotAllowedError/.test(error.message), 'the rejection must pass through');
+  assert.deepEqual(violations, [], 'a cancelled share is not a share');
+});
+
+await checkAsync("destroy() restores the page's own getDisplayMedia", async () => {
+  const { detector } = makeThirdPartyHarness();
+  const original = async () => ({ getVideoTracks: () => [] });
+  const media = { getDisplayMedia: original };
+
+  withMediaDevices(media, () => {
+    detector._observeGetDisplayMedia();
+    assert.notEqual(media.getDisplayMedia, original, 'the wrapper must be installed');
+    detector.destroy();
+    assert.equal(
+      media.getDisplayMedia,
+      original,
+      'and removed again — a permanent patch on a standard API is a hijack'
+    );
+  });
+});
+
+check('a browser without getDisplayMedia degrades quietly', () => {
+  const { detector, logs } = makeThirdPartyHarness();
+  withMediaDevices({}, () => detector._observeGetDisplayMedia());
+  assert.ok(logs.some((entry) => entry.level === 'debug'));
+});
+
+check('one violation type cannot swallow another', () => {
+  // A single shared leading-edge throttle would let the device match consume
+  // the window and silently drop a screen-share event microseconds later.
+  const { detector, violations } = makeThirdPartyHarness(
+    { throttleMs: 60_000 },
+    cameraWithTrack(liveTrack('OBS Virtual Camera'))
+  );
+  detector._checkActiveCamera();
+  detector._emit(VIOLATION_TYPES.SCREEN_SHARE_STARTED, { source: 'getDisplayMedia' });
+  assert.equal(violations.length, 2, 'each type keeps its own throttle budget');
+});
+
+check('throttleMs caps repeats of the same type', () => {
+  const { detector, violations } = makeThirdPartyHarness({ throttleMs: 60_000 });
+  const details = { device: 'OBS Virtual Camera', kind: 'camera', matched: 'obs virtual camera' };
+  detector._emit(VIOLATION_TYPES.THIRD_PARTY_DEVICE, details);
+  detector._emit(VIOLATION_TYPES.THIRD_PARTY_DEVICE, details);
+  assert.equal(violations.length, 1);
+});
+
+check('the detector publishes a state for the host UI', () => {
+  const { detector, states } = makeThirdPartyHarness({}, cameraWithTrack(liveTrack('OBS Virtual Camera')));
+  detector._checkActiveCamera();
+  const last = states.at(-1);
+  assert.equal(last.name, 'thirdParty');
+  assert.equal(last.state.status, 'violation');
+  assert.equal(last.state.count, 1);
+  assert.equal(detector.getState().count, 1);
+});
+
+check('destroy() before init() is safe', () => {
+  const { detector } = makeThirdPartyHarness();
   detector.destroy();
   assert.equal(detector.getState().active, false);
 });

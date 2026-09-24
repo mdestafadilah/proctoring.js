@@ -4,6 +4,7 @@ import { ShortcutsDetector } from './shortcuts.js';
 import { CameraDetector } from './camera.js';
 import { FaceDetector } from './face.js';
 import { AudioDetector } from './audio.js';
+import { ThirdPartyDetector } from './third-party.js';
 
 /**
  * Detector registry.
@@ -18,6 +19,7 @@ export const DETECTORS = Object.freeze({
   camera: CameraDetector,
   face: FaceDetector,
   audio: AudioDetector,
+  thirdParty: ThirdPartyDetector,
 });
 
 export const DETECTOR_NAMES = Object.freeze(Object.keys(DETECTORS));
@@ -38,3 +40,4 @@ export function createDetector(name, config, context) {
 }
 
 export { TabsDetector, RightClickDetector, ShortcutsDetector, CameraDetector, FaceDetector, AudioDetector };
+export { ThirdPartyDetector };

@@ -1,8 +1,9 @@
 # proctoring.js
 
 Zero-dependency browser proctoring toolkit. Detects tab switching, right-click
-use, developer-tools shortcuts, camera tampering, missing or extra faces, and room
-noise — through one small event API.
+use, developer-tools shortcuts, camera tampering, missing or extra faces, room
+noise, and third-party capture software — virtual cameras, loopback audio cables
+and screen shares — through one small event API.
 
 **[Live demo](https://proctoring-js-demo.netlify.app)** ·
 **[npm](https://www.npmjs.com/package/proctoring.js)**
@@ -61,6 +62,7 @@ Design rules it follows:
 | `camera` | off | camera | Denied camera, muted track, covered lens, frozen feed, unplugged device |
 | `face` | off | camera (shared) | No face, multiple faces, looking away |
 | `audio` | off | microphone | Sustained loud noise, spectral busyness |
+| `thirdParty` | off | camera (for labels) | Virtual cameras, loopback audio cables, screen shares |
 
 Face detection reuses the camera detector's stream, so enabling both costs one
 permission prompt, not two.
@@ -129,6 +131,18 @@ new Proctor({
     voiceThreshold: 0.5,
     detectMultipleVoices: false,    // experimental
     throttleMs: 3000,
+  },
+
+  thirdParty: {
+    enabled: false,
+    detectVirtualDevices: true,     // scan enumerateDevices() for virtual devices
+    detectActiveCamera: true,       // needs camera.enabled
+    detectScreenShare: true,        // observe getDisplayMedia
+    devices: null,                  // extra lowercase substrings to flag
+    ignore: null,                   // substrings that suppress a match
+    scanIntervalMs: 15000,          // rescan cadence; devicechange also triggers
+    checkIntervalMs: 3000,          // active-camera poll
+    throttleMs: 2000,
   },
 
   backend: {
@@ -202,6 +216,9 @@ Use `once()` for one-shot listeners and `off()` to remove one.
 | `face-looking-away` | low | Face present but off-centre |
 | `audio-too-loud` | low | RMS above threshold, sustained |
 | `audio-multiple-voices` | medium | Spectral busyness above threshold — experimental, not a speaker count |
+| `third-party-device` | medium | A known virtual/loopback capture device is installed |
+| `virtual-camera-active` | high | The camera in use is one of those devices |
+| `screen-share-started` | high | A screen share started, or the "camera" is a shared screen |
 
 Override any of them with `severity: { 'audio-too-loud': 'medium' }`.
 
@@ -511,6 +528,86 @@ its output as evidence that a second person is present.
 > the exact numbers as indicative. The direction is not in doubt — the metric is
 > gain-dependent by construction, since its floor is an absolute value.
 
+---
+
+## Third-party capture software
+
+Reports the screen-sharing, streaming and remote-access tooling that a web page
+can actually observe — and is explicit about the rest.
+
+| Signal | Violation | How it is seen |
+|---|---|---|
+| A known virtual/loopback device is installed | `third-party-device` | `enumerateDevices()` |
+| The camera in use is one of those devices | `virtual-camera-active` | the live `MediaStreamTrack` |
+| The "camera" is really a shared screen | `screen-share-started` | `displaySurface` on the track |
+| This page started a screen share | `screen-share-started` | `getDisplayMedia`, wrapped |
+
+```js
+new Proctor({
+  camera: { enabled: true, videoElement: '#preview' },
+  thirdParty: {
+    enabled: true,
+    detectVirtualDevices: true,   // scan enumerateDevices()
+    detectActiveCamera: true,     // needs camera.enabled
+    detectScreenShare: true,      // observe getDisplayMedia
+    devices: ['acme capture'],    // extra lowercase substrings to flag
+    ignore: null,                 // suppress known-good lab hardware
+    scanIntervalMs: 15000,        // rescan cadence; devicechange also triggers
+    checkIntervalMs: 3000,        // active-camera poll
+    throttleMs: 2000,
+  },
+})
+```
+
+The shipped device list is exported as `KNOWN_THIRD_PARTY_DEVICES`: OBS Virtual
+Camera, ManyCam, XSplit VCam, Snap Camera, DroidCam, Iriun, EpocCam, NDI,
+SplitCam, CamTwist, Logi Capture, VB-Audio cables, VoiceMeeter, BlackHole,
+Soundflower, and the screen-capture "cameras". Matching is a case-insensitive
+substring test, because vendors decorate labels freely. `matchThirdPartyDevice(label, { extra, ignore })`
+is exported too, so you can run the same rules over your own device inventory.
+
+`ignore` is checked first and beats every match. The list is heuristic, so a site
+with known-good virtual hardware needs that escape hatch.
+
+### Scope, honestly
+
+**Remote-desktop software cannot be detected from a web page.** No browser API
+exposes other processes, and nothing about a TeamViewer, AnyDesk or RDP session is
+visible to page script. If that is what worries you, this detector will not tell
+you it is running — and neither will any other page-level library. Anything that
+claims otherwise is guessing. That is why there is no `detectRemoteSession` option
+here: there is no signal to build one from, and shipping a heuristic with no
+signal would only produce noise that a supervisor learns to ignore.
+
+What *is* observable, and what this detector reports:
+
+- **Synthetic devices.** Third-party capture stacks install virtual cameras and
+  loopback audio cables, and `enumerateDevices()` lists them by name. This is the
+  main signal, and it is an observation rather than an inference. Note that it is
+  a *capability*, not an act: `third-party-device` means the software is
+  installed, which is why it is `medium` while actually using one is `high`.
+- **The live camera track.** Its label identifies the device, so a candidate
+  feeding a pre-recorded video through OBS is caught even when the virtual camera
+  was plugged in after the initial scan. A track carrying `displaySurface` is a
+  screen capture wearing a camera's label — the most conclusive signal available
+  from inside a page.
+- **Screen shares this page starts.** `getDisplayMedia` is wrapped while the
+  detector runs and restored on `destroy()`. A share started in Zoom, Discord, or
+  from the OS never passes through the page and is invisible here.
+
+Two caveats worth designing around:
+
+- **The device scan is blind without permission.** Browsers blank `label` until
+  the user has granted access to that kind at least once. With no permission the
+  scan runs, finds nothing, and logs a `debug` line saying so — silence here means
+  "could not see", not "clean". Run it next to `camera`, or call
+  `proctor.getDetector('thirdParty').scan()` right after permission is granted.
+- **No stream is opened and nothing is uploaded.** This detector never calls
+  `getUserMedia` itself; `detectActiveCamera` reads the camera detector's existing
+  track, so enabling both costs no extra permission prompt.
+
+---
+
 ## Sending violations to a backend
 
 ```js
@@ -650,15 +747,15 @@ not as proof.
 npm install
 npm run dev              # demo page at http://localhost:5173/demo.html
 npm run build            # emits dist/proctoring.js, .cjs, .umd.js + index.d.ts
-npm test                 # build + 102 checks against the built artifact
+npm test                 # build + 132 checks against the built artifact
 ```
 
-Five suites, 171 checks in total:
+Five suites, 204 checks in total:
 
 | Command | Checks | What it proves |
 |---|---|---|
-| `npm run verify` | 102 | Build output, exports, report math, screenshot helpers, right-click + shortcut + face + audio decision logic |
-| `npm run verify:browser` | 44 | Real Edge: tab switch, right-click, keyboard shortcuts, camera stream, audio sampler, teardown, screenshots |
+| `npm run verify` | 132 | Build output, exports, report math, screenshot helpers, right-click + shortcut + face + audio + third-party decision logic |
+| `npm run verify:browser` | 47 | Real Edge: tab switch, right-click, keyboard shortcuts, camera stream, audio sampler, device scan, `getDisplayMedia` wrap/restore, teardown, screenshots |
 | `npm run verify:umd` | 6 | The `<script src>` path via a plain static server |
 | `npm run verify:face` | 7 | face-api CDN + weights resolve and inference runs |
 | `npm run verify:static` | 12 | The deployed demo shape: one HTML file + the published CDN bundle |
