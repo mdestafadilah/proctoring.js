@@ -750,12 +750,12 @@ npm run build            # emits dist/proctoring.js, .cjs, .umd.js + index.d.ts
 npm test                 # build + 132 checks against the built artifact
 ```
 
-Five suites, 204 checks in total:
+Five suites, 208 checks in total:
 
 | Command | Checks | What it proves |
 |---|---|---|
 | `npm run verify` | 132 | Build output, exports, report math, screenshot helpers, right-click + shortcut + face + audio + third-party decision logic |
-| `npm run verify:browser` | 47 | Real Edge: tab switch, right-click, keyboard shortcuts, camera stream, audio sampler, device scan, `getDisplayMedia` wrap/restore, teardown, screenshots |
+| `npm run verify:browser` | 51 | Real Edge: tab switch, right-click, keyboard shortcuts, camera stream, audio sampler, device scan, live-camera-track match, `getDisplayMedia` wrap/restore, teardown, screenshots |
 | `npm run verify:umd` | 6 | The `<script src>` path via a plain static server |
 | `npm run verify:face` | 7 | face-api CDN + weights resolve and inference runs |
 | `npm run verify:static` | 12 | The deployed demo shape: one HTML file + the published CDN bundle |
@@ -806,6 +806,14 @@ Two deliberate testing choices worth knowing:
 - **The synthetic microphone is silent**, so the browser suite asserts the
   absence of a false positive rather than a real `audio-too-loud` event. The
   loud path is covered by the stubbed-analyser tests.
+- **The third-party camera path runs against a real track**, because what needs
+  proving there is not the matching rule (unit-tested) but that the detector
+  reads the *camera detector's own* live track. The browser suite counts
+  `getUserMedia` calls and fails on more than one, which is what backs the claim
+  that enabling both costs no second permission prompt. A clean machine must
+  also stay silent, so the suite asserts the absence of a false
+  `virtual-camera-active` before forcing a match by declaring the local label as
+  a pattern — and asserts it fires once, not once per tick.
 
 Right-click detection and keyboard shortcuts get the opposite treatment:
 `verify:browser` pushes a **real** right-click and a **real** `Ctrl+Shift+I`

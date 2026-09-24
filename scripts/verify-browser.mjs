@@ -1001,6 +1001,202 @@ try {
   ok('getDisplayMedia is wrapped while running, and restored on destroy');
 
   // ---------------------------------------------------------------------
+  // 10b. The live-camera signal, against a real MediaStreamTrack.
+  //
+  //      The Node suite can only hand `_checkActiveCamera()` a stubbed track,
+  //      so the part that actually matters is proved here: the detector reads
+  //      the camera detector's *own* track rather than opening a second stream
+  //      — in a real session a second stream means a second permission prompt
+  //      — and a genuine camera is never reported. OBS is not installed on this
+  //      machine, so the honest result is silence, and that is asserted.
+  // ---------------------------------------------------------------------
+
+  const cameraWatch = await page.evaluate(`(async () => {
+    const { Proctor } = await import('/src/index.js');
+
+    // Counting calls is the only honest way to show no second stream is
+    // opened. The demo page never calls getUserMedia itself, so every call
+    // counted here belongs to the library.
+    const media = navigator.mediaDevices;
+    const originalGetUserMedia = media.getUserMedia;
+    let calls = 0;
+    media.getUserMedia = function (...args) {
+      calls += 1;
+      return originalGetUserMedia.apply(this, args);
+    };
+
+    const video = document.createElement('video');
+    video.id = 'cam-watch';
+    video.muted = true;
+    video.playsInline = true;
+    document.body.appendChild(video);
+
+    const proctor = new Proctor({
+      logLevel: 'silent',
+      report: { persist: false },
+      tabs: { enabled: false },
+      camera: { enabled: true, videoElement: '#cam-watch', throttleMs: 0 },
+      // Only the camera signal. The device scan and the getDisplayMedia
+      // wrapper are proved above; leaving them off makes any violation here
+      // attributable to the live track alone.
+      thirdParty: {
+        enabled: true,
+        detectVirtualDevices: false,
+        detectScreenShare: false,
+        detectActiveCamera: true,
+        checkIntervalMs: 40,
+      },
+    });
+
+    const events = [];
+    proctor.on('violation', (v) => events.push({ type: v.type, details: v.details }));
+    proctor.on('detector:error', ({ detector, error }) =>
+      events.push({ failed: detector, message: error.message })
+    );
+
+    try {
+      await proctor.start();
+      const callsAfterStart = calls;
+
+      const track = proctor.getDetector('camera')?.getStream?.()?.getVideoTracks?.()[0] ?? null;
+
+      // getSettings() is the call the detector makes on every tick, so a
+      // throw here would be a live bug on real hardware.
+      let settings = null;
+      let settingsError = null;
+      try {
+        settings = track ? { ...track.getSettings() } : null;
+      } catch (err) {
+        settingsError = String(err);
+      }
+
+      const label = track ? track.label : null;
+      const readyState = track ? track.readyState : null;
+
+      // Several checkIntervalMs ticks. A real camera must stay silent on every
+      // one of them — a detector that fires on ordinary hardware is worse than
+      // no detector at all.
+      await new Promise((done) => setTimeout(done, 320));
+
+      return {
+        callsAfterStart,
+        label,
+        readyState,
+        settings,
+        settingsError,
+        events,
+        status: proctor.getDetectorState('thirdParty')?.status ?? null,
+      };
+    } finally {
+      proctor.destroy();
+      media.getUserMedia = originalGetUserMedia;
+      video.remove();
+    }
+  })()`);
+
+  assert.equal(
+    cameraWatch.callsAfterStart,
+    1,
+    `thirdParty must reuse the camera stream instead of opening its own (saw ${cameraWatch.callsAfterStart} getUserMedia calls)`
+  );
+  ok('third-party detection reuses the camera stream (no second permission prompt)');
+
+  assert.equal(
+    cameraWatch.settingsError,
+    null,
+    `getSettings() threw on a real track: ${cameraWatch.settingsError}`
+  );
+  assert.equal(cameraWatch.readyState, 'live', 'the camera track must be live while watched');
+  assert.ok(cameraWatch.label, 'a granted camera track must expose a label');
+  assert.equal(cameraWatch.status, 'running', 'the detector must report a running state');
+  ok(`the live track is readable (label="${cameraWatch.label}", settings keys=${Object.keys(cameraWatch.settings ?? {}).length})`);
+
+  assert.deepEqual(
+    cameraWatch.events,
+    [],
+    `a real camera must produce no violation and no error: ${JSON.stringify(cameraWatch.events)}`
+  );
+  ok('a real camera is never reported as a virtual device');
+
+  // ---------------------------------------------------------------------
+  // 10c. The same path, with a match forced.
+  //
+  //      The label that *is* on this machine is declared as a pattern, so the
+  //      detector has to match the live track's own label — and report it once
+  //      on change, not once per tick.
+  // ---------------------------------------------------------------------
+
+  const cameraMatch = await page.evaluate(`(async () => {
+    const { Proctor } = await import('/src/index.js');
+
+    // Labels stay blank until permission is granted, so ask first — exactly
+    // what a proctored page's own camera detector does.
+    const probe = await navigator.mediaDevices.getUserMedia({ video: true });
+    const label = probe.getVideoTracks()[0]?.label ?? null;
+    for (const t of probe.getTracks()) t.stop();
+    if (!label) return { label: null, events: [] };
+
+    const video = document.createElement('video');
+    video.id = 'cam-match';
+    video.muted = true;
+    video.playsInline = true;
+    document.body.appendChild(video);
+
+    const proctor = new Proctor({
+      logLevel: 'silent',
+      report: { persist: false },
+      tabs: { enabled: false },
+      camera: { enabled: true, videoElement: '#cam-match', throttleMs: 0 },
+      thirdParty: {
+        enabled: true,
+        detectVirtualDevices: false,
+        detectScreenShare: false,
+        detectActiveCamera: true,
+        checkIntervalMs: 40,
+        devices: [label],
+      },
+    });
+
+    const events = [];
+    proctor.on('violation', (v) => events.push({ type: v.type, details: v.details }));
+    proctor.on('detector:error', ({ detector, error }) =>
+      events.push({ failed: detector, message: error.message })
+    );
+
+    try {
+      await proctor.start();
+      // Long enough for many checkIntervalMs ticks: a state must be reported
+      // once on change, not once per tick.
+      await new Promise((done) => setTimeout(done, 320));
+      return { label, events };
+    } finally {
+      proctor.destroy();
+      video.remove();
+    }
+  })()`);
+
+  assert.ok(cameraMatch.label, 'a camera label must be readable once permission is granted');
+
+  const virtual = cameraMatch.events.filter((v) => v.type === 'virtual-camera-active');
+  assert.equal(
+    virtual.length,
+    1,
+    `a virtual camera must be reported exactly once across many ticks, got ${virtual.length}: ${JSON.stringify(cameraMatch.events)}`
+  );
+  assert.equal(virtual[0].details.device, cameraMatch.label, 'the report must name the live track');
+  assert.equal(
+    virtual[0].details.matched,
+    cameraMatch.label.trim().toLowerCase(),
+    'the report must name the pattern that matched'
+  );
+  assert.equal(
+    cameraMatch.events.some((v) => v.type === 'third-party-device'),
+    false,
+    'with the device scan off, the camera path must not also report a scan hit'
+  );
+  ok(`the live camera track is matched once, not once per tick (matched="${virtual[0].details.matched}")`);
+
+  // ---------------------------------------------------------------------
   // 11. No console noise.
   // ---------------------------------------------------------------------
   console.log('\nBrowser: console');
