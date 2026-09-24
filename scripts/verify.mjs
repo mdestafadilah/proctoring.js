@@ -9,12 +9,18 @@
  *   node scripts/verify.mjs
  */
 import { strict as assert } from 'node:assert';
+import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { dirname, resolve } from 'node:path';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const dist = resolve(here, '..', 'dist');
+
+// Read rather than duplicate. A literal here would make the version check below
+// compare two constants, so a `src/index.js` left at the old version after a
+// release bump would still pass.
+const pkg = JSON.parse(readFileSync(resolve(here, '..', 'package.json'), 'utf8'));
 
 /** Dynamic import requires a file:// URL — a bare Windows path is rejected. */
 const asUrl = (filename) => pathToFileURL(resolve(dist, filename)).href;
@@ -66,7 +72,7 @@ const {
 check('Proctor is a constructor', () => assert.equal(typeof Proctor, 'function'));
 check('createProctor is a factory', () => assert.equal(typeof createProctor, 'function'));
 check('default export is Proctor', () => assert.equal(esm.default, Proctor));
-check('version matches package.json', () => assert.equal(version, '0.3.0'));
+check('version matches package.json', () => assert.equal(version, pkg.version));
 check('every detector is registered', () =>
   assert.deepEqual(
     [...DETECTOR_NAMES],

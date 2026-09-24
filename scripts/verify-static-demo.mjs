@@ -95,14 +95,14 @@ try {
   })()`);
 
   assert.equal(load.hasGlobal, true, 'window.Proctoring must be defined');
-  assert.equal(load.version, '0.3.0', `unexpected version: ${load.version}`);
-  assert.equal(load.badge, 'v0.3.0');
+  assert.equal(load.version, '0.3.1', `unexpected version: ${load.version}`);
+  assert.equal(load.badge, 'v0.3.1');
   assert.deepEqual(load.detectors, ['tabs', 'rightClick', 'shortcuts', 'camera', 'face', 'audio']);
   ok(`UMD dari jsDelivr dimuat (window.Proctoring v${load.version})`);
 
   assert.equal(load.cdnScript.length, 1, 'the demo must load exactly one CDN script');
   assert.ok(
-    load.cdnScript[0].includes('proctoring.js@0.3.0'),
+    load.cdnScript[0].includes('proctoring.js@0.3.1'),
     `unexpected CDN URL: ${load.cdnScript[0]}`
   );
   ok('skrip dimuat dari URL jsDelivr yang di-pin ke versi terbit');

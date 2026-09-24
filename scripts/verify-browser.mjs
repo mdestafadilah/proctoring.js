@@ -63,7 +63,7 @@ try {
 
   assert.equal(api.hasProctor, true, 'Proctor must be exported');
   assert.deepEqual(api.detectors, ['tabs', 'rightClick', 'shortcuts', 'camera', 'face', 'audio']);
-  assert.equal(api.version, '0.3.0');
+  assert.equal(api.version, '0.3.1');
   assert.ok(api.modelUrl.startsWith('https://cdn.jsdelivr.net/'), 'model URL must be a CDN URL');
   ok(`module loads in browser (${api.keys.length} exports, v${api.version})`);
 

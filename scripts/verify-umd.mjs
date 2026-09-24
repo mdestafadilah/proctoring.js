@@ -52,7 +52,7 @@ try {
   ok('window.Proctoring is defined after a plain <script src>');
 
   assert.equal(result.globalName, 'Proctoring');
-  assert.equal(result.version, '0.3.0');
+  assert.equal(result.version, '0.3.1');
   ok(`global is named "Proctoring" and exposes version ${result.version}`);
 
   assert.equal(result.hasProctor, true, 'Proctor class must be on the global');
