@@ -2051,6 +2051,92 @@ check('stop() releases a page capture even when the session never started', () =
 });
 
 // ---------------------------------------------------------------------------
+group('backend payloads');
+
+await checkAsync('an upload carries the session id', async () => {
+  await withFakeFetch(async (calls) => {
+    const proctor = new Proctor({
+      sessionId: 'attempt-42',
+      tabs: { enabled: false },
+      backend: { enabled: true, endpoint: 'https://api.example/v' },
+    });
+    proctor.started = true;
+    proctor.store.markStarted();
+
+    proctor.reportViolation('tab-hidden', { awayMs: 10 });
+    await settle();
+
+    assert.equal(calls.length, 1);
+    const body = JSON.parse(calls[0].init.body);
+    assert.equal(body.sessionId, 'attempt-42', 'the receiver must be able to tell which session this is');
+    assert.equal(body.violations.length, 1);
+  });
+});
+
+await checkAsync('a snapshot upload carries the same session id', async () => {
+  await withFakeFetch(async (calls) => {
+    const proctor = new Proctor({
+      sessionId: 'attempt-42',
+      tabs: { enabled: false },
+      backend: {
+        enabled: true,
+        endpoint: 'https://api.example/v',
+        snapshotEndpoint: 'https://api.example/s',
+      },
+    });
+
+    proctor.transport.sendSnapshot({ source: 'webcam', at: 'now' });
+    await settle();
+
+    const body = JSON.parse(calls[0].init.body);
+    assert.equal(body.sessionId, 'attempt-42');
+    assert.equal(body.snapshots.length, 1);
+    assert.ok(!('violations' in body));
+  });
+});
+
+await checkAsync('the session id key is always present, even when null', async () => {
+  await withFakeFetch(async (calls) => {
+    const proctor = new Proctor({
+      tabs: { enabled: false },
+      backend: { enabled: true, endpoint: 'https://api.example/v' },
+    });
+    proctor.started = true;
+    proctor.store.markStarted();
+
+    proctor.reportViolation('tab-hidden');
+    proctor.transport.sendSnapshot({ source: 'page', at: 'now' });
+    await settle();
+
+    assert.equal(calls.length, 2);
+    for (const call of calls) {
+      const body = JSON.parse(call.init.body);
+      // A missing key cannot be told apart from an older sender that never
+      // sent one; an explicit null can.
+      assert.ok('sessionId' in body, `the key must always be present: ${call.init.body}`);
+      assert.equal(body.sessionId, null);
+    }
+  });
+});
+
+await checkAsync('the session id is read at send time, not at construction', async () => {
+  await withFakeFetch(async (calls) => {
+    const proctor = new Proctor({
+      tabs: { enabled: false },
+      backend: { enabled: true, endpoint: 'https://api.example/v' },
+    });
+
+    // What `start(overrides)` effectively does to an already-built transport.
+    proctor.options.sessionId = 'set-later';
+
+    proctor.transport.sendSnapshot({ source: 'webcam', at: 'now' });
+    await settle();
+
+    assert.equal(JSON.parse(calls[0].init.body).sessionId, 'set-later');
+  });
+});
+
+// ---------------------------------------------------------------------------
 group('session behaviour without a DOM');
 
 const proctor = new Proctor({ tabs: { enabled: true } });

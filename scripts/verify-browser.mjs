@@ -1350,6 +1350,7 @@ try {
 
     const ENDPOINT = 'https://proctor.invalid/collect';
     const proctor = new Proctor({
+      sessionId: 'beacon-session',
       logLevel: 'silent',
       report: { persist: false },
       tabs: { enabled: true, reportOnClose: true },
@@ -1357,9 +1358,13 @@ try {
     });
 
     const beacons = [];
+    const bodies = [];
     const originalBeacon = navigator.sendBeacon;
     navigator.sendBeacon = (url, blob) => {
       beacons.push({ url, size: blob ? blob.size : 0 });
+      // The body is what actually reaches the endpoint, so read it rather than
+      // trusting the payload builder.
+      bodies.push(blob && typeof blob.text === 'function' ? blob.text() : Promise.resolve(null));
       return true;
     };
 
@@ -1378,10 +1383,12 @@ try {
     window.dispatchEvent(new PageTransitionEvent('pagehide', { persisted: false }));
     await new Promise((done) => setTimeout(done, 60));
 
+    const beaconBodies = await Promise.all(bodies);
+
     proctor.destroy();
     navigator.sendBeacon = originalBeacon;
 
-    return { violations, sent, beacons, endpoint: ENDPOINT };
+    return { violations, sent, beacons, beaconBodies, endpoint: ENDPOINT };
   })()`);
 
   assert.equal(tabClose.violations.length, 1, `expected one tab-closed: ${JSON.stringify(tabClose.violations)}`);
@@ -1400,6 +1407,19 @@ try {
   assert.equal(tabClose.beacons[0].url, tabClose.endpoint);
   assert.ok(tabClose.beacons[0].size > 0, 'the beacon payload must not be empty');
   ok('the violation is beaconed out with the document, not lost with it');
+
+  // The size only proves *something* left. Read the body, because the whole
+  // point of adding `sessionId` is that the receiver can identify the session
+  // from a payload that arrives while the page is already gone.
+  const beaconBody = JSON.parse(tabClose.beaconBodies[0]);
+  assert.equal(
+    beaconBody.sessionId,
+    'beacon-session',
+    `the beacon body must carry the session id: ${tabClose.beaconBodies[0]}`
+  );
+  assert.equal(beaconBody.violations.length, 1);
+  assert.equal(beaconBody.violations[0].type, 'tab-closed');
+  ok('the beaconed body carries the session id and the violation');
 
   // ---------------------------------------------------------------------
   // 13. Periodic snapshots.

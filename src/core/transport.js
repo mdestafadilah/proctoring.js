@@ -11,9 +11,16 @@
  *    (e.g. tab-hidden) is the most interesting one.
  */
 export class BackendTransport {
-  constructor(options, getReport) {
+  /**
+   * @param {object} options the `backend` option block
+   * @param {Function} getReport used for `includeReport`
+   * @param {Function} [getSessionId] read lazily, because the host may set
+   *   `sessionId` through `start(overrides)` after this is constructed
+   */
+  constructor(options, getReport, getSessionId = null) {
     this.options = options;
     this.getReport = getReport;
+    this.getSessionId = getSessionId;
     this.queue = [];
     this.flushing = false;
     this.timer = null;
@@ -29,6 +36,22 @@ export class BackendTransport {
 
   get enabled() {
     return Boolean(this.options.enabled && this.options.endpoint);
+  }
+
+  /**
+   * The session id every payload carries.
+   *
+   * Always present as a key, even when null: a receiver should be able to tell
+   * "this session has no id" from "this sender is an older version", and a
+   * conditional key makes that impossible.
+   */
+  _sessionId() {
+    try {
+      return this.getSessionId?.() ?? null;
+    } catch {
+      // A throwing getter must not cost us the upload.
+      return null;
+    }
   }
 
   /**
@@ -78,6 +101,7 @@ export class BackendTransport {
 
     const endpoint = this.options.snapshotEndpoint || this.options.endpoint;
     const payload = JSON.stringify({
+      sessionId: this._sessionId(),
       snapshots: [snapshot],
       sentAt: new Date().toISOString(),
     });
@@ -112,6 +136,7 @@ export class BackendTransport {
 
   async _request(batch, { keepalive = false } = {}) {
     const body = {
+      sessionId: this._sessionId(),
       violations: batch,
       sentAt: new Date().toISOString(),
     };

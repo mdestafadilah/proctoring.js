@@ -707,8 +707,10 @@ await proctor.start();
 ```
 
 Each snapshot is `{ source, at, dataUrl, bytes, width, height }`. It is emitted as
-an event and, when a backend is configured, POSTed as `{ snapshots: [ … ] }` to
-`backend.snapshotEndpoint`. Snapshots are **not queued and not retried** — a
+an event and, when a backend is configured, POSTed as
+`{ sessionId, snapshots: [ … ], sentAt }` to `backend.snapshotEndpoint` — the same
+`sessionId` the violation payloads carry, so a receiver can attribute a frame to
+a session without guessing. Snapshots are **not queued and not retried** — a
 backlog of stale frames arriving late is worse than a gap, and there is always
 another one coming. A failed upload is swallowed.
 
@@ -761,8 +763,19 @@ new Proctor({
 Each request is `POST` with:
 
 ```json
-{ "violations": [ { "id": "vio_...", "type": "tab-hidden", ... } ], "sentAt": "..." }
+{
+  "sessionId": "attempt-42",
+  "violations": [ { "id": "vio_...", "type": "tab-hidden", ... } ],
+  "sentAt": "..."
+}
 ```
+
+`sessionId` is the same value you passed to the constructor or `start()`. The key
+is **always present**, and is `null` when you did not set one — an absent key
+could not be told apart from an older sender, so a receiver can rely on it being
+there. It is read at send time, not at construction, so setting it through
+`start({ sessionId })` is reflected in every upload. Snapshot uploads carry it
+too.
 
 Reliability behaviour:
 
@@ -908,15 +921,15 @@ not as proof.
 npm install
 npm run dev              # demo page at http://localhost:5173/demo.html
 npm run build            # emits dist/proctoring.js, .cjs, .umd.js + index.d.ts
-npm test                 # build + 159 checks against the built artifact
+npm test                 # build + 163 checks against the built artifact
 ```
 
-Five suites, 248 checks in total:
+Five suites, 253 checks in total:
 
 | Command | Checks | What it proves |
 |---|---|---|
-| `npm run verify` | 159 | Build output, exports, report math, screenshot helpers, and the decision logic of every detector including clipboard, tab-close and snapshot routing |
-| `npm run verify:browser` | 64 | Real Edge: tab switch, right-click, keyboard shortcuts, camera stream, audio sampler, device scan, live-camera-track match, real copy/cut/paste, tab-closed beaconing, webcam and page snapshots, `getDisplayMedia` wrap/restore, teardown, screenshots |
+| `npm run verify` | 163 | Build output, exports, report math, screenshot helpers, webhook payload shape, and the decision logic of every detector including clipboard, tab-close and snapshot routing |
+| `npm run verify:browser` | 65 | Real Edge: tab switch, right-click, keyboard shortcuts, camera stream, audio sampler, device scan, live-camera-track match, real copy/cut/paste, tab-closed beaconing (body read off the blob), webcam and page snapshots, `getDisplayMedia` wrap/restore, teardown, screenshots |
 | `npm run verify:umd` | 6 | The `<script src>` path via a plain static server |
 | `npm run verify:face` | 7 | face-api CDN + weights resolve and inference runs |
 | `npm run verify:static` | 12 | The deployed demo shape: one HTML file + the published CDN bundle |

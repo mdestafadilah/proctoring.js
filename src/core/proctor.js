@@ -30,7 +30,12 @@ export class Proctor {
     this.emitter._logHandler = (level, message, meta) => this._log(level, message, meta);
 
     this.store = new ViolationStore(this.options, this.emitter);
-    this.transport = new BackendTransport(this.options.backend, () => this.getReport());
+    // `sessionId` is read lazily: a host can still set it via `start(overrides)`.
+    this.transport = new BackendTransport(
+      this.options.backend,
+      () => this.getReport(),
+      () => this.options.sessionId
+    );
 
     /** @type {Map<string, object>} */
     this.detectors = new Map();
