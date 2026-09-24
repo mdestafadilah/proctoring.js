@@ -4,8 +4,10 @@ import { isSecureContext, throttle } from '../core/utils.js';
 /**
  * Audio detector.
  *
- * Measures room loudness (RMS) and, optionally, how "busy" the spectrum is — a
- * cheap proxy for more than one voice or a distinct whistle.
+ * Measures room loudness (RMS) and, optionally, how "busy" the spectrum is. The
+ * loudness path is straightforward and well-behaved. The spectral path is
+ * **experimental and cannot count speakers** — see `computeSpectralDensity` for
+ * the measurements behind that claim.
  *
  * Policy decision worth stating: this detector **never records**. It reads the
  * live waveform on the main thread and discards every sample immediately. That
@@ -18,6 +20,17 @@ export class AudioDetector {
   constructor(config, context) {
     this.config = config;
     this.context = context;
+
+    // Said once, at construction, rather than left to the README: a host that
+    // switches this on reasonably expects to be told about extra speakers, and
+    // the metric cannot do that. See `computeSpectralDensity`.
+    if (config.detectMultipleVoices) {
+      context.log(
+        'warn',
+        'audio.detectMultipleVoices is experimental: it measures broadband spectral activity, not speaker count, and voiceThreshold is not calibrated against real audio',
+        { voiceThreshold: config.voiceThreshold }
+      );
+    }
 
     this.stream = null;
     this.audioContext = null;
@@ -191,10 +204,24 @@ export function computeRms(buffer) {
 }
 
 /**
- * Fraction of the spectrum that carries meaningful energy.
+ * Fraction of the spectrum sitting above an absolute amplitude floor.
  *
- * A single speaker concentrates energy in a few low bins; several simultaneous
- * voices smear energy across the mid and high bands, raising this ratio.
+ * Intended as a cheap proxy for "more than one voice". It is a weak one, and two
+ * measured caveats are pinned by tests so this comment cannot drift away from
+ * the behaviour:
+ *
+ * - **Not gain-invariant.** The floor is absolute, so the same source merely
+ *   turned up scores higher: one voice measures 0.0020 at 0.3x gain and 0.0118
+ *   at 1.0x — a 5.9x rise from volume alone. A single loud speaker therefore
+ *   reads as "busier" than two quiet ones.
+ * - **Not a speaker count.** One voice and two differ by only ~1.3x, while a
+ *   room with an elevated noise floor scores ~10x higher than either. The score
+ *   tracks the noise floor more than the number of talkers, so no threshold
+ *   separates "several people talking" from "one person in a noisy room".
+ *
+ * It is kept because `audio-multiple-voices` is a published violation type and a
+ * host that calibrates `voiceThreshold` against its own audio may still find the
+ * ratio useful. Do not present its output as a speaker count.
  */
 export function computeSpectralDensity(freqData, floor = 32) {
   let active = 0;

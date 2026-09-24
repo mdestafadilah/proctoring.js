@@ -13,6 +13,11 @@ dist
 dist-ssr
 *.local
 
+# Vite writes a timestamped copy of vite.config.js beside it when the config
+# needs transforming. It is a scratch file, not source — and `git add -A` will
+# happily pick it up if it is not ignored.
+vite.config.js.timestamp-*
+
 # The face-api weights in models/ ARE tracked deliberately: they are a local
 # development convenience for the `module`/`custom` face providers and for
 # offline work. They are excluded from the npm tarball by .npmignore, so they

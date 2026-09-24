@@ -201,7 +201,7 @@ Use `once()` for one-shot listeners and `off()` to remove one.
 | `face-multiple` | high | More than `maxFaces` faces |
 | `face-looking-away` | low | Face present but off-centre |
 | `audio-too-loud` | low | RMS above threshold, sustained |
-| `audio-multiple-voices` | medium | Spectral busyness above threshold |
+| `audio-multiple-voices` | medium | Spectral busyness above threshold — experimental, not a speaker count |
 
 Override any of them with `severity: { 'audio-too-loud': 'medium' }`.
 
@@ -464,6 +464,53 @@ several, never as proof that DevTools was not used.
 
 ---
 
+## Audio detection
+
+Two signals, both from the same microphone stream:
+
+- **Loudness (RMS)** — reports `audio-too-loud` when the room stays above
+  `rmsThreshold` for `loudGraceMs`. This path is well-behaved, and is the reason
+  to enable the detector at all.
+- **Spectral busyness** — reports `audio-multiple-voices` when the spectrum looks
+  "busy" enough. Opt-in via `detectMultipleVoices`, and experimental.
+
+The detector **never records**. It reads the live waveform on the main thread and
+discards every sample immediately — no `MediaRecorder`, no buffer, nothing to
+leak. That keeps it usable in places where recording a candidate's audio needs
+separate consent.
+
+It also asks `getUserMedia` for `echoCancellation: false`,
+`noiseSuppression: false` and `autoGainControl: false`. Those stages exist to
+remove exactly the background noise and distant voices you are trying to detect.
+
+### Scope, honestly
+
+`detectMultipleVoices` **cannot count speakers**, and enabling it logs a warning
+saying so. Three measurements, each pinned by a check in `npm run verify`:
+
+| What was measured | Result |
+|---|---|
+| One voice at 0.3x vs 1.0x volume | 0.0020 → 0.0118 — **5.9x from volume alone** |
+| One voice vs two voices | only **1.3x** apart |
+| Room with background noise vs one voice | noise scores **~10x higher** |
+
+So the score tracks how loud the room is and how high its noise floor is, not how
+many people are talking. A single loud speaker reads as "busier" than two quiet
+ones, and no threshold separates "several people talking" from "one person in a
+noisy room".
+
+The shipped `voiceThreshold` of `0.5` is also **unreachable** in practice —
+realistic spectra measure 0.01–0.12, so the violation will not fire unless you
+calibrate that value against your own audio.
+
+It is kept because `audio-multiple-voices` is a published violation type, and a
+host that calibrates the threshold may still find the ratio useful. Do not treat
+its output as evidence that a second person is present.
+
+> These measurements come from synthetic spectra, not real recordings, so treat
+> the exact numbers as indicative. The direction is not in doubt — the metric is
+> gain-dependent by construction, since its floor is an absolute value.
+
 ## Sending violations to a backend
 
 ```js
@@ -610,7 +657,7 @@ Five suites, 166 checks in total:
 
 | Command | Checks | What it proves |
 |---|---|---|
-| `npm run verify` | 97 | Build output, exports, report math, screenshot helpers, right-click + shortcut + face + audio decision logic |
+| `npm run verify` | 102 | Build output, exports, report math, screenshot helpers, right-click + shortcut + face + audio decision logic |
 | `npm run verify:browser` | 44 | Real Edge: tab switch, right-click, keyboard shortcuts, camera stream, audio sampler, teardown, screenshots |
 | `npm run verify:umd` | 6 | The `<script src>` path via a plain static server |
 | `npm run verify:face` | 7 | face-api CDN + weights resolve and inference runs |

@@ -218,13 +218,28 @@ export const DEFAULT_OPTIONS = {
     rmsThreshold: 0.08,
     /** Report sustained loudness only after this many ms. */
     loudGraceMs: 1500,
-    /** Report when detected voice/whistle activity exceeds `voiceThreshold`. */
+    /**
+     * Report when the spectral score exceeds this. Read only when
+     * `detectMultipleVoices` is on.
+     *
+     * NOT CALIBRATED. Realistic spectra measure 0.01-0.12, so this default of 0.5
+     * is unreachable in practice and the violation never fires. Calibrate against
+     * your own audio before relying on it.
+     */
     voiceThreshold: 0.5,
     /** FFT size for the analyser; higher is more frequency resolution. */
     fftSize: 1024,
     /** Smoothing for the analyser, 0..1. */
     smoothingTimeConstant: 0.8,
-    /** Treat the input as speech and try to count speakers. */
+    /**
+     * Score the spectrum in an attempt to spot several speakers at once.
+     *
+     * EXPERIMENTAL — it does not count speakers. The score rises with volume
+     * alone and is dominated by the room's noise floor, so it cannot separate
+     * "several people talking" from "one person in a noisy room". See
+     * `computeSpectralDensity` in `detectors/audio.js` for the measurements.
+     * Enabling it logs a warning. Off by default.
+     */
     detectMultipleVoices: false,
     throttleMs: 3000,
   },

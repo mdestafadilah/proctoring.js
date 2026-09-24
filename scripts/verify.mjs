@@ -412,6 +412,7 @@ group('audio decision logic');
  */
 function makeAudioHarness(overrides = {}) {
   const violations = [];
+  const logs = [];
   const config = {
     rmsThreshold: 0.08,
     loudGraceMs: 1000,
@@ -425,7 +426,7 @@ function makeAudioHarness(overrides = {}) {
   const context = {
     options: {},
     report: (type, details, meta) => violations.push({ type, details, ...meta }),
-    log: () => {},
+    log: (level, message, details) => logs.push({ level, message, details }),
     emit: () => {},
     setState: () => {},
   };
@@ -445,7 +446,7 @@ function makeAudioHarness(overrides = {}) {
   detector.buffer = new Float32Array(config.fftSize);
   detector.freqData = new Uint8Array(512);
 
-  return { detector, violations };
+  return { detector, violations, logs };
 }
 
 check('silence produces no violation', () => {
@@ -523,6 +524,71 @@ check('spectral density reports multiple voices when enabled', () => {
   assert.equal(violations.length, 1);
   assert.equal(violations[0].type, 'audio-multiple-voices');
   assert.ok(violations[0].details.density >= 0.5);
+});
+
+check('enabling detectMultipleVoices warns that it is experimental', () => {
+  const { logs } = makeAudioHarness({ detectMultipleVoices: true });
+  const warnings = logs.filter((entry) => entry.level === 'warn');
+  assert.equal(warnings.length, 1, 'exactly one warning, emitted at construction');
+  assert.match(warnings[0].message, /experimental/);
+  assert.match(warnings[0].message, /not speaker count/);
+  assert.equal(warnings[0].details.voiceThreshold, 0.5);
+});
+
+check('the experimental warning is absent on the default path', () => {
+  const { logs } = makeAudioHarness();
+  assert.deepEqual(logs, [], 'a detector that is off must not log anything');
+});
+
+// ---------------------------------------------------------------------------
+// Known limitations of the spectral metric.
+//
+// These are CHARACTERISATION checks, not desired behaviour. They pin the
+// measurements quoted in the `computeSpectralDensity` JSDoc, the `voiceThreshold`
+// option docs and the README, so those comments cannot quietly become lies.
+// If someone improves the metric these checks SHOULD fail — that is the point:
+// update them together with the documentation, never on their own.
+// ---------------------------------------------------------------------------
+
+/** A plausible speech-like spectrum: strong low-mid, decaying harmonic tail. */
+const SPEECH_SPECTRUM = [200, 185, 170, 150, 128, 105, 88, 70, 55, 42, 30, 22, 15, 10, 6, 3];
+
+/** Place values into a 512-bin spectrum, optionally scaled to change loudness. */
+const asSpectrum = (values, gain = 1) => {
+  const out = new Uint8Array(512);
+  out.set(values.map((v) => Math.min(255, Math.round(v * gain))));
+  return out;
+};
+
+check('KNOWN LIMITATION: the density score rises with volume alone', () => {
+  const quiet = computeSpectralDensity(asSpectrum(SPEECH_SPECTRUM, 0.3));
+  const loud = computeSpectralDensity(asSpectrum(SPEECH_SPECTRUM, 1));
+  assert.ok(
+    loud > quiet * 4,
+    `one voice scores ${(loud / quiet).toFixed(1)}x higher merely for being louder ` +
+      `(quiet=${quiet}, loud=${loud}) — the floor is absolute, so the metric is not gain-invariant`
+  );
+});
+
+check('KNOWN LIMITATION: a noisy room outscores any voice count', () => {
+  const noisyRoom = computeSpectralDensity(asSpectrum(new Array(64).fill(90)));
+  const oneVoice = computeSpectralDensity(asSpectrum(SPEECH_SPECTRUM));
+  assert.ok(
+    noisyRoom > oneVoice * 5,
+    `background noise (${noisyRoom}) must dominate voices (${oneVoice}) — that is why no ` +
+      `threshold separates "several people talking" from "one person in a noisy room"`
+  );
+});
+
+check('KNOWN LIMITATION: the default voiceThreshold is unreachable', () => {
+  const loudestRealistic = Math.max(
+    computeSpectralDensity(asSpectrum(SPEECH_SPECTRUM, 1)),
+    computeSpectralDensity(asSpectrum(new Array(64).fill(90)))
+  );
+  assert.ok(
+    loudestRealistic < 0.5,
+    `the default of 0.5 is documented as unreachable, but a realistic spectrum scored ${loudestRealistic}`
+  );
 });
 
 check('_sample is a no-op before the analyser exists', () => {
