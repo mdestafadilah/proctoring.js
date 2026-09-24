@@ -8,14 +8,15 @@
     "build": "vite build",
     "preview": "vite preview"
   },
+  "devDependencies": {
+    "vite": "^5.2.0"
+  },
   "dependencies": {
-    "@tensorflow/tfjs": "^4.19.0",
+    "@tensorflow/tfjs": "^4.17.0",
     "@vladmandic/face-api": "^1.7.13",
     "canvas": "^2.11.2",
-    "preact": "^10.19.6"
-  },
-  "devDependencies": {
-    "@preact/preset-vite": "^2.8.2",
-    "vite": "^5.2.0"
+    "fs": "^0.0.1-security",
+    "path": "^0.12.7",
+    "whistle-detection": "^1.0.3"
   }
 }
