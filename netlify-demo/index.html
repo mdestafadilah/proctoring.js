@@ -198,11 +198,13 @@
           <label class="toggle"><input type="checkbox" id="optTabs" checked /> tabs</label>
           <label class="toggle"><input type="checkbox" id="optRightClick" checked /> rightClick</label>
           <label class="toggle"><input type="checkbox" id="optShortcuts" checked /> shortcuts</label>
+          <label class="toggle"><input type="checkbox" id="optClipboard" /> clipboard</label>
           <label class="toggle"><input type="checkbox" id="optCamera" checked /> camera</label>
           <label class="toggle"><input type="checkbox" id="optFace" /> face</label>
           <label class="toggle"><input type="checkbox" id="optAudio" /> audio</label>
           <label class="toggle"><input type="checkbox" id="optThirdParty" /> thirdParty</label>
           <label class="toggle"><input type="checkbox" id="optShots" /> screenshots</label>
+          <label class="toggle"><input type="checkbox" id="optSnapshots" /> snapshots</label>
         </div>
         <p class="status" id="status">Siap. Pilih detector lalu tekan "Mulai sesi".</p>
       </div>
@@ -234,7 +236,7 @@
       would. This is deliberate: it proves the artifact on npm works, rather
       than a local build that only exists on the author's machine.
     -->
-    <script src="https://cdn.jsdelivr.net/npm/proctoring.js@0.4.0/dist/proctoring.umd.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/proctoring.js@0.5.0/dist/proctoring.umd.js"></script>
     <script>
       (function () {
         'use strict';
@@ -337,7 +339,14 @@
             // Detect only: a demo page that hijacked Ctrl+Shift+I would be
             // hostile to anyone who wants to inspect it.
             shortcuts: { enabled: $('optShortcuts').checked, block: false },
-            camera: { enabled: wantCamera, videoElement: '#preview' },
+            // Deteksi saja: demo yang menelan Ctrl+C akan menyusahkan pemakai.
+            clipboard: { enabled: $('optClipboard').checked, block: false },
+            camera: {
+              enabled: wantCamera,
+              videoElement: '#preview',
+              // 0 = mati; demo memakai jeda pendek supaya snapshot terlihat.
+              snapshotIntervalMs: $('optSnapshots').checked ? 5000 : 0,
+            },
             face: { enabled: wantFace },
             audio: { enabled: $('optAudio').checked },
             // Deteksi perangkat lunak pihak ketiga (kamera virtual, kabel audio

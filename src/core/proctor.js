@@ -3,7 +3,7 @@ import { ViolationStore } from './store.js';
 import { BackendTransport } from './transport.js';
 import { DEFAULT_OPTIONS, EVENTS, LOG_LEVELS, VIOLATION_TYPES, SEVERITY } from './options.js';
 import { mergeOptions, isBrowser, isSecureContext } from './utils.js';
-import { captureFrame, isVisualViolation } from './screenshot.js';
+import { captureFrame, dataUrlBytes, isVisualViolation } from './screenshot.js';
 import { createDetector, DETECTOR_NAMES } from '../detectors/index.js';
 
 /**
@@ -36,6 +36,12 @@ export class Proctor {
     this.detectors = new Map();
     this.started = false;
     this.destroyed = false;
+
+    /** Periodic webcam stills; null unless `camera.snapshotIntervalMs > 0`. */
+    this._snapshotTimer = null;
+    /** @type {{stream: MediaStream, video: HTMLVideoElement, track: MediaStreamTrack|null, onEnded: Function}|null} */
+    this._pageCapture = null;
+    this._pageCaptureTimer = null;
 
     if (this.options.report.persist && !this.options.sessionId) {
       // A restored session without an id is almost always a reload mid-exam;
@@ -88,6 +94,8 @@ export class Proctor {
 
     await Promise.all(enabled.map((name) => this._setupDetector(name, context)));
 
+    this._startSnapshots();
+
     this.emitter.emit(EVENTS.STARTED, {
       startedAt: new Date(this.store.startedAt).toISOString(),
       detectors: [...this.detectors.keys()],
@@ -108,6 +116,9 @@ export class Proctor {
       }
     }
     this.detectors.clear();
+
+    this._stopSnapshots();
+    this.stopPageCapture();
 
     this.started = false;
     this.store.markStopped();
@@ -187,6 +198,118 @@ export class Proctor {
   }
 
   /**
+   * Start periodic stills of a screen the candidate shares.
+   *
+   * Must be called from a user gesture. `getDisplayMedia()` is gated on
+   * transient activation, so this can never be started from `start()` and can
+   * never run unattended — which is the honest reason there is no "page
+   * screenshot" option that simply turns itself on. The candidate picks the
+   * surface, so `pageCapture.displaySurface` is a hint about which kind to ask
+   * for, not a guarantee of what they choose.
+   *
+   * Every still is emitted as a `snapshot` event and posted to
+   * `backend.snapshotEndpoint` (falling back to `backend.endpoint`) when a
+   * backend is configured. Snapshots are samples, not violations: they never
+   * enter the report, the score, or the screenshot budget.
+   *
+   * @returns {Promise<MediaStream>} the capture stream
+   */
+  async startPageCapture() {
+    if (this.destroyed) throw new Error('proctoring.js: session was destroyed');
+    if (!this.options.pageCapture.enabled) {
+      throw new Error('proctoring.js: pageCapture.enabled is false');
+    }
+    // Idempotent: a double click on the host's button must not open a second
+    // share, which would leave the first one running with no way to stop it.
+    if (this._pageCapture) return this._pageCapture.stream;
+
+    const media = typeof navigator !== 'undefined' ? navigator.mediaDevices : null;
+    if (!media?.getDisplayMedia) {
+      throw new Error('proctoring.js: getDisplayMedia is unavailable in this browser');
+    }
+
+    let stream;
+    try {
+      stream = await media.getDisplayMedia({
+        video: { displaySurface: this.options.pageCapture.displaySurface },
+        audio: false,
+      });
+    } catch (err) {
+      // `NotAllowedError` when the candidate declines; `InvalidStateError` when
+      // the call did not come from a user gesture. Both are ordinary outcomes.
+      this._log('warn', 'Page capture was not started', { error: err });
+      throw err;
+    }
+
+    const video = document.createElement('video');
+    video.muted = true;
+    video.playsInline = true;
+    video.setAttribute('aria-hidden', 'true');
+    // Off-screen but still rendered: `display:none` stops frame delivery.
+    video.style.cssText =
+      'position:fixed;top:0;left:0;width:1px;height:1px;opacity:0;pointer-events:none;';
+    video.srcObject = stream;
+    document.body.appendChild(video);
+
+    try {
+      await video.play();
+    } catch {
+      /* A refused autoplay does not stop frames arriving for `drawImage`. */
+    }
+
+    const track = stream.getVideoTracks()[0] ?? null;
+    /**
+     * The candidate can end the share from the browser's own UI at any moment.
+     * Tear down when they do, rather than sampling a dead track forever.
+     */
+    const onEnded = () => this.stopPageCapture();
+    track?.addEventListener?.('ended', onEnded);
+
+    this._pageCapture = { stream, video, track, onEnded };
+    this._pageCaptureTimer = setInterval(
+      () => this._takeSnapshot('page'),
+      this.options.pageCapture.intervalMs
+    );
+
+    this._log('info', 'Page capture started');
+    return stream;
+  }
+
+  /**
+   * Stop page capture and release the shared surface.
+   *
+   * Safe to call when nothing is running, which is what makes it usable as the
+   * `ended` handler.
+   */
+  stopPageCapture() {
+    if (this._pageCaptureTimer) clearInterval(this._pageCaptureTimer);
+    this._pageCaptureTimer = null;
+
+    const capture = this._pageCapture;
+    this._pageCapture = null;
+    if (!capture) return;
+
+    capture.track?.removeEventListener?.('ended', capture.onEnded);
+
+    for (const track of capture.stream.getTracks()) {
+      try {
+        track.stop();
+      } catch {
+        /* Already ended. */
+      }
+    }
+
+    capture.video.srcObject = null;
+    capture.video.remove();
+    this._log('info', 'Page capture stopped');
+  }
+
+  /** Is a page capture currently running? */
+  isPageCapturing() {
+    return this._pageCapture !== null;
+  }
+
+  /**
    * Tear down everything and release every listener.
    *
    * Also closes the session window if the caller never called `stop()`. Without
@@ -199,6 +322,10 @@ export class Proctor {
     } else if (!this.store.endedAt && this.store.startedAt) {
       this.store.markStopped();
     }
+    // Unconditional: page capture can be running on a session that never
+    // reached `start()`, and a shared screen must not outlive the instance.
+    this._stopSnapshots();
+    this.stopPageCapture();
     this.transport.destroy();
     this.emitter.removeAllListeners();
     this.destroyed = true;
@@ -206,11 +333,14 @@ export class Proctor {
 
   /**
    * Called by detectors. Public so a host app can log its own custom
-   * violations into the same report (e.g. a suspicious copy/paste).
+   * violations into the same report (e.g. a server-side check that failed).
    *
    * @param {string} type
    * @param {object} [details]
-   * @param {object} [meta] { detector, severity, timestamp }
+   * @param {object} [meta] { detector, severity, timestamp, terminal }
+   *   `terminal: true` means the document is being torn down: the violation
+   *   skips the queue and goes out over `sendBeacon` instead, because a queued
+   *   `fetch` would be cancelled with the page.
    * @returns {object|null}
    */
   reportViolation(type, details = {}, meta = {}) {
@@ -228,7 +358,8 @@ export class Proctor {
       this._captureScreenshot(violation);
     }
 
-    this.transport.send(violation);
+    // `terminal` means the document is going away; see BackendTransport.send().
+    this.transport.send(violation, { terminal: meta.terminal === true });
     return violation;
   }
 
@@ -263,6 +394,82 @@ export class Proctor {
         type: violation.type,
       });
     }
+  }
+
+  /**
+   * Start the periodic webcam snapshot when the host asked for one.
+   *
+   * Driven from here rather than from the camera detector: a frame has to be
+   * routed (event + backend), and a detector has no business knowing about the
+   * transport. The camera detector still owns the stream — this only reads its
+   * video element, exactly as `_captureScreenshot` does.
+   */
+  _startSnapshots() {
+    const { enabled, snapshotIntervalMs } = this.options.camera;
+    if (!(snapshotIntervalMs > 0)) return;
+
+    if (!enabled) {
+      // A timer with no stream behind it would tick forever and never produce a
+      // frame; say so once instead of failing silently every interval.
+      this._log(
+        'warn',
+        'camera.snapshotIntervalMs is set but camera is disabled — no webcam snapshots will be taken'
+      );
+      return;
+    }
+
+    this._snapshotTimer = setInterval(() => this._takeSnapshot('webcam'), snapshotIntervalMs);
+  }
+
+  _stopSnapshots() {
+    if (this._snapshotTimer) clearInterval(this._snapshotTimer);
+    this._snapshotTimer = null;
+  }
+
+  /**
+   * Capture one still and route it.
+   *
+   * Returns null rather than throwing when no frame can be read: a snapshot is
+   * a sample, and missing one is never worth interrupting a session for.
+   *
+   * @param {'webcam'|'page'} source
+   * @returns {object|null} the snapshot that was emitted
+   */
+  _takeSnapshot(source) {
+    if (this.destroyed || !this.started) return null;
+
+    const video = this._snapshotSource(source);
+    if (!video) return null;
+
+    const { maxWidth, quality } =
+      source === 'page'
+        ? { maxWidth: this.options.pageCapture.maxWidth, quality: this.options.pageCapture.quality }
+        : {
+            maxWidth: this.options.report.screenshotMaxWidth,
+            quality: this.options.report.screenshotQuality,
+          };
+
+    const dataUrl = captureFrame(video, { maxWidth, quality });
+    if (!dataUrl) return null;
+
+    const snapshot = {
+      source,
+      at: new Date().toISOString(),
+      dataUrl,
+      bytes: dataUrlBytes(dataUrl),
+      width: video.videoWidth || null,
+      height: video.videoHeight || null,
+    };
+
+    this.emitter.emit(EVENTS.SNAPSHOT, snapshot);
+    this.transport.sendSnapshot(snapshot);
+    return snapshot;
+  }
+
+  /** The video element a snapshot source reads from, or null. */
+  _snapshotSource(source) {
+    if (source === 'page') return this._pageCapture?.video ?? null;
+    return this.detectors.get('camera')?.getVideoElement?.() ?? null;
   }
 
   // -- internals -----------------------------------------------------------

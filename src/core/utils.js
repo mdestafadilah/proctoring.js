@@ -121,3 +121,33 @@ export function clamp(value, min, max, fallback = min) {
   const num = typeof value === 'number' && Number.isFinite(value) ? value : fallback;
   return Math.min(max, Math.max(min, num));
 }
+
+/**
+ * Describe an event target as `tag#id.class.class`, for violation details.
+ *
+ * Deliberately *not* a full CSS path: a path is noisy in a report and leaks the
+ * host page's structure, which a proctoring payload has no business carrying.
+ * Capped at 120 characters for the same reason.
+ *
+ * Shared by every detector that records where a gesture landed.
+ */
+export function describeTarget(target) {
+  if (!target || typeof target !== 'object') return null;
+  // DOCUMENT_NODE — the gesture landed on the page background.
+  if (target.nodeType === 9) return 'document';
+
+  const tag = typeof target.tagName === 'string' ? target.tagName.toLowerCase() : null;
+  if (!tag) return null;
+
+  const id = typeof target.id === 'string' && target.id ? `#${target.id}` : '';
+  // SVG elements expose className as an SVGAnimatedString, not a string.
+  const rawClass = typeof target.className === 'string' ? target.className : '';
+  const classes = rawClass
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, 3)
+    .map((name) => `.${name}`)
+    .join('');
+
+  return `${tag}${id}${classes}`.slice(0, 120);
+}

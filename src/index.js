@@ -33,6 +33,7 @@ export {
   detectPlatform,
 } from './detectors/shortcuts.js';
 export { CameraDetector } from './detectors/camera.js';
+export { ClipboardDetector } from './detectors/clipboard.js';
 export { FaceDetector } from './detectors/face.js';
 export { AudioDetector, computeRms, computeSpectralDensity } from './detectors/audio.js';
 export {
@@ -67,4 +68,4 @@ export {
 
 export { isBrowser, isSecureContext, mergeOptions, throttle, every, uid, clamp } from './core/utils.js';
 
-export const version = '0.4.0';
+export const version = '0.5.0';

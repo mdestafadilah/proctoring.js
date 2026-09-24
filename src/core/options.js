@@ -12,6 +12,13 @@ export const EVENTS = Object.freeze({
   STARTED: 'started',
   /** A detector raised a violation. Payload: Violation */
   VIOLATION: 'violation',
+  /**
+   * A periodic capture was taken. Payload: Snapshot
+   *
+   * Deliberately not a violation: a snapshot is a sample, not an accusation,
+   * so it never enters the report or the score.
+   */
+  SNAPSHOT: 'snapshot',
   /** An individual detector finished initialising. Payload: { detector } */
   DETECTOR_READY: 'detector:ready',
   /** A detector failed to initialise. Payload: { detector, error } */
@@ -31,9 +38,13 @@ export const EVENTS = Object.freeze({
 /** Violation types. Keys are stable identifiers; values are the wire format. */
 export const VIOLATION_TYPES = Object.freeze({
   TAB_HIDDEN: 'tab-hidden',
+  TAB_CLOSED: 'tab-closed',
   WINDOW_BLUR: 'window-blur',
   RIGHT_CLICK: 'right-click',
   SHORTCUT_USED: 'shortcut-used',
+  CLIPBOARD_COPY: 'clipboard-copy',
+  CLIPBOARD_CUT: 'clipboard-cut',
+  CLIPBOARD_PASTE: 'clipboard-paste',
   CAMERA_DISABLED: 'camera-disabled',
   CAMERA_MUTED: 'camera-muted',
   CAMERA_DENIED: 'camera-denied',
@@ -67,9 +78,21 @@ const SEVERITY_WEIGHT = {
 /** Default severity per violation type. Overridable via `options.severity`. */
 export const DEFAULT_SEVERITY = Object.freeze({
   [VIOLATION_TYPES.TAB_HIDDEN]: SEVERITY.HIGH,
+  /**
+   * Leaving the page is not by itself evidence of anything — every candidate
+   * closes the tab when they finish. High only because it is terminal: there is
+   * no later violation to put it in context with.
+   */
+  [VIOLATION_TYPES.TAB_CLOSED]: SEVERITY.HIGH,
   [VIOLATION_TYPES.WINDOW_BLUR]: SEVERITY.MEDIUM,
   [VIOLATION_TYPES.RIGHT_CLICK]: SEVERITY.MEDIUM,
   [VIOLATION_TYPES.SHORTCUT_USED]: SEVERITY.HIGH,
+  /** Copying question text out and pasting an answer in are the two halves of
+   *  the same act, so they share a severity; a host that cares about only one
+   *  direction can override either via `options.severity`. */
+  [VIOLATION_TYPES.CLIPBOARD_COPY]: SEVERITY.MEDIUM,
+  [VIOLATION_TYPES.CLIPBOARD_CUT]: SEVERITY.MEDIUM,
+  [VIOLATION_TYPES.CLIPBOARD_PASTE]: SEVERITY.MEDIUM,
   [VIOLATION_TYPES.CAMERA_DISABLED]: SEVERITY.CRITICAL,
   [VIOLATION_TYPES.CAMERA_MUTED]: SEVERITY.HIGH,
   [VIOLATION_TYPES.CAMERA_DENIED]: SEVERITY.CRITICAL,
@@ -118,6 +141,16 @@ export const DEFAULT_OPTIONS = {
      */
     minHiddenMs: 0,
     throttleMs: 300,
+    /**
+     * Report `tab-closed` when the page is really going away.
+     *
+     * Off by default: every candidate closes the tab when they finish, and only
+     * the host knows whether that is worth recording. `pagehide` fires on close,
+     * reload and navigation alike, and delivery is best-effort — `sendBeacon` is
+     * the only channel that survives teardown, and even that can be dropped.
+     * A missing `tab-closed` therefore means "unknown", never "clean".
+     */
+    reportOnClose: false,
   },
 
   /**
@@ -148,6 +181,40 @@ export const DEFAULT_OPTIONS = {
     throttleMs: 500,
     /** Record tag/id/classes of the element that was right-clicked. */
     captureTarget: true,
+  },
+
+  /**
+   * Emit `violation` for copy / cut / paste. No permissions needed.
+   *
+   * Off by default: copying text is ordinary behaviour, and in an exam it may be
+   * exactly what the candidate is meant to do. The host decides.
+   *
+   * What this detector does *not* do is read the clipboard. `textLength` is
+   * measured from the event's own `clipboardData`, which the browser has already
+   * handed the page; the text itself is never stored, logged or sent. Reading
+   * the real clipboard needs a permission prompt and would turn a behavioural
+   * signal into content surveillance.
+   */
+  clipboard: {
+    enabled: false,
+    /** Which events to report. Any subset of 'copy' | 'cut' | 'paste'. */
+    actions: ['copy', 'cut', 'paste'],
+    /**
+     * Call `preventDefault()`, stopping the clipboard operation outright.
+     * Opt-in: silently breaking copy/paste changes how the host page behaves.
+     */
+    block: false,
+    /**
+     * Minimum gap between two reports of the *same* action. Guards against
+     * editors that fire more than one event per gesture. It is not what keeps
+     * copy and paste apart — those are separate actions with separate budgets.
+     */
+    throttleMs: 250,
+    /**
+     * Elements to ignore, as CSS selectors. For the host's own UI: a "copy
+     * question" button must not be reported as the candidate copying.
+     */
+    ignoreSelectors: null,
   },
 
   /**
@@ -191,6 +258,14 @@ export const DEFAULT_OPTIONS = {
     /** Poll cadence for mute/ended checks, in ms. */
     checkIntervalMs: 1000,
     throttleMs: 2000,
+    /**
+     * Capture a still of the preview every N ms and emit `snapshot`.
+     *
+     * 0 disables it. Off by default for the same reason as
+     * `report.captureScreenshots`: continuously photographing a candidate
+     * creates a retention obligation, and only the host can accept that.
+     */
+    snapshotIntervalMs: 0,
   },
 
   face: {
@@ -310,6 +385,33 @@ export const DEFAULT_OPTIONS = {
     throttleMs: 2000,
   },
 
+  /**
+   * Periodic stills of the shared screen, emitted as `snapshot`.
+   *
+   * Off by default, and it cannot be turned on silently even if it is: a page
+   * cannot rasterise its own DOM, so the only zero-dependency route is
+   * `getDisplayMedia()`, which the browser only allows from a user gesture and
+   * which makes the candidate pick a surface and grant screen sharing. Call
+   * `proctor.startPageCapture()` from a click handler; `start()` never does it.
+   *
+   * Because the surface is the candidate's choice, `displaySurface` is a hint,
+   * not a guarantee, and the capture stops the moment they hit "Stop sharing".
+   */
+  pageCapture: {
+    enabled: false,
+    /** Capture cadence, in ms. */
+    intervalMs: 30000,
+    /** Downscale target in pixels. 0 keeps the captured resolution. */
+    maxWidth: 640,
+    /** JPEG quality, 0..1. */
+    quality: 0.6,
+    /**
+     * Which surface to ask for: 'browser' (a tab), 'window' or 'monitor'.
+     * Advisory — the picker is the candidate's, and they may choose otherwise.
+     */
+    displaySurface: 'browser',
+  },
+
   /** Deliver violations to an HTTP endpoint via fetch. Off by default. */
   backend: {
     enabled: false,
@@ -318,6 +420,12 @@ export const DEFAULT_OPTIONS = {
      * inside the host app; see src/core/store.js.
      */
     endpoint: null,
+    /**
+     * Separate endpoint for periodic snapshots. A snapshot is far bulkier than
+     * a violation and usually belongs in object storage, so sharing one handler
+     * for both is rarely what a host wants. Falls back to `endpoint`.
+     */
+    snapshotEndpoint: null,
     method: 'POST',
     headers: {},
     /** Send as a JSON body (true) or keepalive beacon for page-unload (false). */

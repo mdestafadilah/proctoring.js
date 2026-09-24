@@ -78,6 +78,8 @@ const {
   ThirdPartyDetector,
   KNOWN_THIRD_PARTY_DEVICES,
   matchThirdPartyDevice,
+  ClipboardDetector,
+  TabsDetector,
   version,
 } = esm;
 
@@ -88,7 +90,7 @@ check('version matches package.json', () => assert.equal(version, pkg.version));
 check('every detector is registered', () =>
   assert.deepEqual(
     [...DETECTOR_NAMES],
-    ['tabs', 'rightClick', 'shortcuts', 'camera', 'face', 'audio', 'thirdParty']
+    ['tabs', 'rightClick', 'shortcuts', 'clipboard', 'camera', 'face', 'audio', 'thirdParty']
   ));
 check('the registry maps names to classes', () =>
   assert.equal(esm.DETECTORS.shortcuts, ShortcutsDetector));
@@ -131,7 +133,7 @@ check('named exports survive CJS', () => {
   assert.equal(cjs.EVENTS.VIOLATION, 'violation');
   assert.deepEqual(
     [...cjs.DETECTOR_NAMES],
-    ['tabs', 'rightClick', 'shortcuts', 'camera', 'face', 'audio', 'thirdParty']
+    ['tabs', 'rightClick', 'shortcuts', 'clipboard', 'camera', 'face', 'audio', 'thirdParty']
   );
 });
 check('CommonJS and ESM expose identical keys', () => {
@@ -1437,6 +1439,582 @@ check('destroy() before init() is safe', () => {
   const { detector } = makeThirdPartyHarness();
   detector.destroy();
   assert.equal(detector.getState().active, false);
+});
+
+// ---------------------------------------------------------------------------
+group('clipboard detector');
+
+/**
+ * Minimal `document`/`window` stand-ins.
+ *
+ * Enough for a detector to register and remove its listeners, which is what the
+ * DOM-less tests need to prove: the event names, the capture phase, and that
+ * teardown really detaches. The genuine events are proved in verify-browser.mjs.
+ *
+ * `invalidSelectors` lets a test declare which selectors the stand-in should
+ * reject, so the "bad configuration" branch can be exercised without a CSS
+ * engine.
+ */
+async function withFakeDom(fn, { invalidSelectors = [] } = {}) {
+  const docListeners = [];
+  const winListeners = [];
+
+  const track = (list) => ({
+    addEventListener(type, handler, capture) {
+      list.push({ type, handler, capture });
+    },
+    removeEventListener(type, handler, capture) {
+      const at = list.findIndex(
+        (l) => l.type === type && l.handler === handler && l.capture === capture
+      );
+      if (at !== -1) list.splice(at, 1);
+    },
+  });
+
+  const fakeDocument = {
+    ...track(docListeners),
+    visibilityState: 'visible',
+    querySelector(selector) {
+      if (invalidSelectors.includes(selector)) {
+        const err = new Error(`'${selector}' is not a valid selector`);
+        err.name = 'SyntaxError';
+        throw err;
+      }
+      return null;
+    },
+  };
+
+  const fakeWindow = track(winListeners);
+
+  const hadDocument = Object.prototype.hasOwnProperty.call(globalThis, 'document');
+  const hadWindow = Object.prototype.hasOwnProperty.call(globalThis, 'window');
+  const previousDocument = globalThis.document;
+  const previousWindow = globalThis.window;
+
+  Object.defineProperty(globalThis, 'document', {
+    value: fakeDocument,
+    configurable: true,
+    writable: true,
+  });
+  Object.defineProperty(globalThis, 'window', {
+    value: fakeWindow,
+    configurable: true,
+    writable: true,
+  });
+
+  try {
+    return await fn({ docListeners, winListeners });
+  } finally {
+    restoreGlobal('document', hadDocument, previousDocument);
+    restoreGlobal('window', hadWindow, previousWindow);
+  }
+}
+
+function restoreGlobal(name, had, previous) {
+  if (had) {
+    Object.defineProperty(globalThis, name, { value: previous, configurable: true, writable: true });
+  } else {
+    delete globalThis[name];
+  }
+}
+
+function makeClipboardHarness(overrides = {}) {
+  const violations = [];
+  const logs = [];
+  const states = [];
+  const config = {
+    actions: ['copy', 'cut', 'paste'],
+    block: false,
+    throttleMs: 0,
+    ignoreSelectors: null,
+    ...overrides,
+  };
+  const context = {
+    options: {},
+    report: (type, details, meta) => violations.push({ type, details, ...meta }),
+    log: (level, message, meta) => logs.push({ level, message, meta }),
+    emit: () => {},
+    setState: (name, state) => states.push({ name, state }),
+  };
+  return { detector: new ClipboardDetector(config, context), violations, logs, states };
+}
+
+/** A clipboard event carrying `text`, with an observable `preventDefault`. */
+const clipboardEvent = (text = 'hello', target = null) => ({
+  target,
+  defaultPrevented: false,
+  clipboardData: { getData: (type) => (type === 'text' ? text : '') },
+  preventDefault() {
+    this.defaultPrevented = true;
+  },
+});
+
+/** Dispatch to the listener the detector registered for `type`. */
+const fireClipboard = (listeners, type, event) =>
+  listeners.find((l) => l.type === type).handler(event);
+
+await checkAsync('copy, cut and paste each map to their own violation type', async () => {
+  await withFakeDom(async ({ docListeners }) => {
+    const { detector, violations } = makeClipboardHarness();
+    await detector.init();
+
+    fireClipboard(docListeners, 'copy', clipboardEvent('a'));
+    fireClipboard(docListeners, 'cut', clipboardEvent('b'));
+    fireClipboard(docListeners, 'paste', clipboardEvent('c'));
+
+    assert.deepEqual(
+      violations.map((v) => v.type),
+      ['clipboard-copy', 'clipboard-cut', 'clipboard-paste']
+    );
+    assert.ok(violations.every((v) => v.detector === 'clipboard'));
+  });
+});
+
+await checkAsync('the clipboard text is never recorded, only its length', async () => {
+  await withFakeDom(async ({ docListeners }) => {
+    const { detector, violations } = makeClipboardHarness();
+    await detector.init();
+
+    fireClipboard(docListeners, 'copy', clipboardEvent('SECRET ANSWER TEXT'));
+
+    assert.equal(violations[0].details.textLength, 'SECRET ANSWER TEXT'.length);
+    assert.ok(
+      !JSON.stringify(violations[0]).includes('SECRET'),
+      'the clipboard contents must never reach a violation'
+    );
+    assert.equal(violations[0].details.action, 'copy');
+  });
+});
+
+await checkAsync('listeners are capture-phase and are removed by destroy()', async () => {
+  await withFakeDom(async ({ docListeners }) => {
+    const { detector } = makeClipboardHarness();
+    await detector.init();
+
+    assert.deepEqual(
+      docListeners.map((l) => l.type),
+      ['copy', 'cut', 'paste']
+    );
+    // Capture phase: a page calling stopPropagation() in the bubble phase must
+    // not be able to hide the gesture.
+    assert.ok(docListeners.every((l) => l.capture === true), 'listeners must use the capture phase');
+
+    detector.destroy();
+    assert.deepEqual(docListeners, [], 'destroy() must detach every listener');
+    assert.equal(detector.getState().active, false);
+  });
+});
+
+await checkAsync('block:true suppresses every event, including throttled ones', async () => {
+  await withFakeDom(async ({ docListeners }) => {
+    const { detector, violations } = makeClipboardHarness({ block: true, throttleMs: 60_000 });
+    await detector.init();
+
+    const first = clipboardEvent('a');
+    const second = clipboardEvent('b');
+    fireClipboard(docListeners, 'copy', first);
+    fireClipboard(docListeners, 'copy', second);
+
+    assert.equal(violations.length, 1, 'the second copy is inside the throttle window');
+    assert.equal(first.defaultPrevented, true);
+    assert.equal(
+      second.defaultPrevented,
+      true,
+      'suppression must not be throttled, or a copy would silently go through'
+    );
+  });
+});
+
+await checkAsync('copy and paste have separate throttle budgets', async () => {
+  await withFakeDom(async ({ docListeners }) => {
+    // A single shared budget would let a copy consume the window and swallow the
+    // paste that follows it — two different acts, two different events.
+    const { detector, violations } = makeClipboardHarness({ throttleMs: 60_000 });
+    await detector.init();
+
+    fireClipboard(docListeners, 'copy', clipboardEvent('a'));
+    fireClipboard(docListeners, 'paste', clipboardEvent('b'));
+    assert.equal(violations.length, 2, 'a copy must not consume the paste budget');
+
+    fireClipboard(docListeners, 'copy', clipboardEvent('c'));
+    assert.equal(violations.length, 2, 'a repeat of the same action is throttled');
+  });
+});
+
+await checkAsync('an unknown action is reported and does not take the others down', async () => {
+  await withFakeDom(async ({ docListeners }) => {
+    const { detector, logs } = makeClipboardHarness({ actions: ['copy', 'coppy', 'paste'] });
+    await detector.init();
+
+    assert.deepEqual(
+      docListeners.map((l) => l.type),
+      ['copy', 'paste']
+    );
+    assert.equal(logs.filter((l) => l.level === 'warn').length, 1);
+  });
+});
+
+await checkAsync('ignoreSelectors skips the host app own UI', async () => {
+  await withFakeDom(
+    async ({ docListeners }) => {
+      const { detector, violations } = makeClipboardHarness({ ignoreSelectors: ['#toolbar'] });
+      await detector.init();
+
+      const inToolbar = {
+        tagName: 'BUTTON',
+        id: 'copy-question',
+        className: '',
+        closest: (sel) => (sel === '#toolbar' ? { tagName: 'DIV' } : null),
+      };
+      const inAnswer = {
+        tagName: 'TEXTAREA',
+        id: 'answer',
+        className: '',
+        closest: () => null,
+      };
+
+      fireClipboard(docListeners, 'copy', clipboardEvent('q', inToolbar));
+      assert.deepEqual(violations, [], "the host's own copy button must not be reported");
+
+      fireClipboard(docListeners, 'copy', clipboardEvent('a', inAnswer));
+      assert.equal(violations.length, 1, 'a real copy must still be reported');
+    },
+    { invalidSelectors: [] }
+  );
+});
+
+await checkAsync('an invalid ignoreSelectors entry is dropped, not thrown per event', async () => {
+  await withFakeDom(
+    async ({ docListeners }) => {
+      const { detector, logs, violations } = makeClipboardHarness({
+        ignoreSelectors: ['#ok', 'nope['],
+      });
+      await detector.init();
+
+      assert.equal(logs.filter((l) => l.level === 'warn').length, 1);
+      // The valid entry must survive, and an event must not throw.
+      fireClipboard(docListeners, 'copy', clipboardEvent('a', { tagName: 'P', closest: () => null }));
+      assert.equal(violations.length, 1);
+    },
+    { invalidSelectors: ['nope['] }
+  );
+});
+
+await checkAsync('the target of a clipboard action is described', async () => {
+  await withFakeDom(async ({ docListeners }) => {
+    const { detector, violations } = makeClipboardHarness();
+    await detector.init();
+
+    fireClipboard(docListeners, 'copy', clipboardEvent('a', { nodeType: 9 }));
+    fireClipboard(
+      docListeners,
+      'paste',
+      clipboardEvent('b', { tagName: 'TEXTAREA', id: 'answer', className: 'a b c d' })
+    );
+
+    assert.equal(violations[0].details.target, 'document');
+    assert.equal(violations[1].details.target, 'textarea#answer.a.b.c');
+  });
+});
+
+await checkAsync('an event with no clipboardData still reports', async () => {
+  await withFakeDom(async ({ docListeners }) => {
+    const { detector, violations } = makeClipboardHarness();
+    await detector.init();
+
+    fireClipboard(docListeners, 'paste', { target: null, preventDefault() {} });
+
+    assert.equal(violations.length, 1, 'a missing payload must not lose the event itself');
+    assert.equal(violations[0].details.textLength, null);
+  });
+});
+
+await checkAsync('destroy() before init() is safe', async () => {
+  const { detector } = makeClipboardHarness();
+  detector.destroy();
+  assert.equal(detector.getState().active, false);
+});
+
+// ---------------------------------------------------------------------------
+group('tab close reporting');
+
+function makeTabsHarness(overrides = {}) {
+  const violations = [];
+  const logs = [];
+  const states = [];
+  const config = {
+    trackWindowBlur: true,
+    minHiddenMs: 0,
+    throttleMs: 0,
+    reportOnClose: false,
+    ...overrides,
+  };
+  const context = {
+    options: {},
+    report: (type, details, meta) => violations.push({ type, details, ...meta }),
+    log: (level, message, meta) => logs.push({ level, message, meta }),
+    emit: () => {},
+    setState: (name, state) => states.push({ name, state }),
+  };
+  return { detector: new TabsDetector(config, context), violations, logs, states };
+}
+
+const pageHide = (listeners, event) => listeners.find((l) => l.type === 'pagehide').handler(event);
+
+await checkAsync('pagehide is silent while reportOnClose is off', async () => {
+  await withFakeDom(async ({ winListeners }) => {
+    const { detector, violations } = makeTabsHarness({ reportOnClose: false });
+    await detector.init();
+
+    pageHide(winListeners, { persisted: false });
+    assert.deepEqual(violations, []);
+  });
+});
+
+await checkAsync('a page going away reports tab-closed as a terminal violation', async () => {
+  await withFakeDom(async ({ winListeners }) => {
+    const { detector, violations } = makeTabsHarness({ reportOnClose: true });
+    await detector.init();
+
+    pageHide(winListeners, { persisted: false });
+
+    assert.equal(violations.length, 1);
+    assert.equal(violations[0].type, 'tab-closed');
+    assert.equal(violations[0].detector, 'tabs');
+    assert.equal(violations[0].details.wasVisible, true);
+    // Terminal routing is what gets it out over sendBeacon; without it the
+    // violation dies in the queue with the document.
+    assert.equal(violations[0].terminal, true, 'tab-closed must be routed as terminal');
+  });
+});
+
+await checkAsync('entering the back/forward cache is not a close', async () => {
+  await withFakeDom(async ({ winListeners }) => {
+    const { detector, violations } = makeTabsHarness({ reportOnClose: true });
+    await detector.init();
+
+    pageHide(winListeners, { persisted: true });
+
+    assert.deepEqual(violations, [], 'a bfcache entry keeps the page alive');
+    assert.equal(detector.hidden, false, 'the page must not be marked hidden');
+  });
+});
+
+await checkAsync('closing after switching away records that the page was not visible', async () => {
+  await withFakeDom(async ({ winListeners }) => {
+    const { detector, violations } = makeTabsHarness({ reportOnClose: true });
+    await detector.init();
+
+    // The candidate switched away first, then closed the tab.
+    detector.hidden = true;
+    pageHide(winListeners, { persisted: false });
+
+    assert.equal(violations[0].details.wasVisible, false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+group('periodic snapshots');
+
+/**
+ * `document` with just enough of a canvas for the real `captureFrame` to run.
+ *
+ * The alternative would be stubbing `captureFrame` itself, which would test the
+ * stub instead of the capture path.
+ */
+async function withFakeCaptureDom(fn) {
+  const hadDocument = Object.prototype.hasOwnProperty.call(globalThis, 'document');
+  const previousDocument = globalThis.document;
+
+  const fakeDocument = {
+    createElement(tag) {
+      if (tag !== 'canvas') return {};
+      return {
+        width: 0,
+        height: 0,
+        getContext: () => ({ drawImage: () => {} }),
+        toDataURL: () => 'data:image/jpeg;base64,QUJD',
+      };
+    },
+  };
+
+  Object.defineProperty(globalThis, 'document', {
+    value: fakeDocument,
+    configurable: true,
+    writable: true,
+  });
+
+  try {
+    return await fn();
+  } finally {
+    restoreGlobal('document', hadDocument, previousDocument);
+  }
+}
+
+/** Replace `fetch` for the duration of `fn`, recording every call. */
+async function withFakeFetch(fn) {
+  const calls = [];
+  const previous = globalThis.fetch;
+
+  globalThis.fetch = async (url, init) => {
+    calls.push({ url, init });
+    return { ok: true, status: 200 };
+  };
+
+  try {
+    return await fn(calls);
+  } finally {
+    if (previous === undefined) delete globalThis.fetch;
+    else globalThis.fetch = previous;
+  }
+}
+
+/** Let the transport's `fetch` promise chain settle. */
+const settle = () => new Promise((done) => setTimeout(done, 0));
+
+await checkAsync('a snapshot is emitted, sent, and never counted as a violation', async () => {
+  await withFakeCaptureDom(async () => {
+    const proctor = new Proctor({ tabs: { enabled: false }, camera: { enabled: true } });
+    proctor.started = true;
+    proctor.store.markStarted();
+
+    const video = { readyState: 2, videoWidth: 640, videoHeight: 480 };
+    proctor.detectors.set('camera', { getVideoElement: () => video });
+
+    const events = [];
+    proctor.on(EVENTS.SNAPSHOT, (snapshot) => events.push(snapshot));
+
+    const sent = [];
+    proctor.transport.sendSnapshot = (snapshot) => sent.push(snapshot);
+
+    const snapshot = proctor._takeSnapshot('webcam');
+
+    assert.equal(snapshot.source, 'webcam');
+    assert.equal(snapshot.width, 640);
+    assert.equal(snapshot.height, 480);
+    assert.ok(snapshot.dataUrl.startsWith('data:image/jpeg'));
+    assert.equal(snapshot.bytes, 3);
+    assert.equal(events.length, 1, 'the host must receive a snapshot event');
+    assert.equal(sent.length, 1, 'the backend path must be offered the snapshot');
+    assert.equal(proctor.getReport().total, 0, 'a snapshot is a sample, not a violation');
+    assert.equal(proctor.getReport().score, 100);
+  });
+});
+
+await checkAsync('no video element means no snapshot and no throw', async () => {
+  await withFakeCaptureDom(async () => {
+    const proctor = new Proctor({ tabs: { enabled: false } });
+    proctor.started = true;
+    proctor.store.markStarted();
+
+    const events = [];
+    proctor.on(EVENTS.SNAPSHOT, () => events.push(1));
+
+    assert.equal(proctor._takeSnapshot('webcam'), null);
+    assert.equal(proctor._takeSnapshot('page'), null);
+    assert.deepEqual(events, []);
+  });
+});
+
+check('snapshotIntervalMs without a camera warns instead of ticking forever', () => {
+  const proctor = new Proctor({
+    tabs: { enabled: false },
+    camera: { enabled: false, snapshotIntervalMs: 5_000 },
+  });
+
+  const logs = [];
+  proctor.on(EVENTS.LOG, (entry) => logs.push(entry));
+  proctor._startSnapshots();
+
+  assert.equal(logs.filter((l) => l.level === 'warn').length, 1);
+  assert.equal(proctor._snapshotTimer, null, 'no timer may be left running with no stream');
+});
+
+check('a snapshot interval of 0 starts no timer', () => {
+  const proctor = new Proctor({ tabs: { enabled: false }, camera: { enabled: true } });
+  proctor._startSnapshots();
+  assert.equal(proctor._snapshotTimer, null);
+});
+
+await checkAsync('a snapshot is posted to snapshotEndpoint, never as a violation', async () => {
+  await withFakeFetch(async (calls) => {
+    const proctor = new Proctor({
+      tabs: { enabled: false },
+      backend: {
+        enabled: true,
+        endpoint: 'https://api.example/violations',
+        snapshotEndpoint: 'https://api.example/snapshots',
+      },
+    });
+
+    proctor.transport.sendSnapshot({ source: 'webcam', at: 'now', bytes: 3, dataUrl: 'data:,' });
+    await settle();
+
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].url, 'https://api.example/snapshots');
+
+    const body = JSON.parse(calls[0].init.body);
+    assert.equal(body.snapshots.length, 1);
+    assert.equal(body.snapshots[0].source, 'webcam');
+    assert.ok(!('violations' in body), 'a snapshot payload must not masquerade as violations');
+  });
+});
+
+await checkAsync('without snapshotEndpoint, snapshots fall back to the endpoint', async () => {
+  await withFakeFetch(async (calls) => {
+    const proctor = new Proctor({
+      tabs: { enabled: false },
+      backend: { enabled: true, endpoint: 'https://api.example/all' },
+    });
+
+    proctor.transport.sendSnapshot({ source: 'page', at: 'now' });
+    await settle();
+
+    assert.equal(calls[0].url, 'https://api.example/all');
+  });
+});
+
+await checkAsync('a snapshot never enters the violation queue and never throws', async () => {
+  const previous = globalThis.fetch;
+  globalThis.fetch = async () => {
+    throw new Error('offline');
+  };
+
+  try {
+    const proctor = new Proctor({
+      tabs: { enabled: false },
+      backend: { enabled: true, endpoint: 'https://api.example/x' },
+    });
+
+    proctor.transport.sendSnapshot({ source: 'webcam', at: 'now' });
+    await settle();
+
+    assert.deepEqual(proctor.transport.queue, [], 'a sample must not join the evidence queue');
+  } finally {
+    if (previous === undefined) delete globalThis.fetch;
+    else globalThis.fetch = previous;
+  }
+});
+
+await checkAsync('with no backend configured, no snapshot request is made', async () => {
+  await withFakeFetch(async (calls) => {
+    const proctor = new Proctor({ tabs: { enabled: false } });
+    proctor.transport.sendSnapshot({ source: 'webcam', at: 'now' });
+    await settle();
+
+    assert.deepEqual(calls, [], 'nothing may leave the page unless a backend was configured');
+  });
+});
+
+await checkAsync('startPageCapture() refuses when pageCapture is disabled', async () => {
+  const proctor = new Proctor({ tabs: { enabled: false } });
+  await assert.rejects(() => proctor.startPageCapture(), /pageCapture\.enabled is false/);
+});
+
+check('stopPageCapture() is safe when nothing is running', () => {
+  const proctor = new Proctor({ tabs: { enabled: false } });
+  proctor.stopPageCapture();
+  assert.equal(proctor.isPageCapturing(), false);
 });
 
 // ---------------------------------------------------------------------------

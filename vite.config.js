@@ -68,9 +68,13 @@ export type Severity = 'info' | 'low' | 'medium' | 'high' | 'critical';
 
 export type ViolationType =
   | 'tab-hidden'
+  | 'tab-closed'
   | 'window-blur'
   | 'right-click'
   | 'shortcut-used'
+  | 'clipboard-copy'
+  | 'clipboard-cut'
+  | 'clipboard-paste'
   | 'camera-disabled'
   | 'camera-muted'
   | 'camera-denied'
@@ -132,6 +136,8 @@ export interface TabsOptions {
   trackWindowBlur?: boolean;
   minHiddenMs?: number;
   throttleMs?: number;
+  /** Report tab-closed when the page is torn down. Best-effort delivery. */
+  reportOnClose?: boolean;
 }
 
 export interface RightClickOptions {
@@ -141,6 +147,17 @@ export interface RightClickOptions {
   dedupeMs?: number;
   throttleMs?: number;
   captureTarget?: boolean;
+}
+
+export interface ClipboardOptions {
+  enabled?: boolean;
+  /** Any subset of 'copy' | 'cut' | 'paste'. */
+  actions?: Array<'copy' | 'cut' | 'paste'>;
+  /** Call preventDefault(), stopping the clipboard operation outright. */
+  block?: boolean;
+  throttleMs?: number;
+  /** CSS selectors whose descendants are ignored (the host's own UI). */
+  ignoreSelectors?: string[] | null;
 }
 
 export interface ShortcutsOptions {
@@ -164,6 +181,8 @@ export interface CameraOptions {
   detectEnded?: boolean;
   checkIntervalMs?: number;
   throttleMs?: number;
+  /** Capture a webcam still every N ms and emit a snapshot event. 0 disables. */
+  snapshotIntervalMs?: number;
 }
 
 export interface FaceOptions {
@@ -213,6 +232,11 @@ export interface ThirdPartyOptions {
 export interface BackendOptions {
   enabled?: boolean;
   endpoint?: string | null;
+  /**
+   * Separate endpoint for periodic snapshots. A snapshot is far bulkier than a
+   * violation and usually belongs in object storage. Falls back to endpoint.
+   */
+  snapshotEndpoint?: string | null;
   method?: 'POST' | 'PUT' | 'PATCH';
   headers?: Record<string, string>;
   batchIntervalMs?: number;
@@ -222,6 +246,29 @@ export interface BackendOptions {
   retryDelayMs?: number;
   timeoutMs?: number;
   minSeverity?: Severity | null;
+}
+
+export interface PageCaptureOptions {
+  /**
+   * Must be true for startPageCapture() to run. There is no option that turns
+   * page capture on by itself: getDisplayMedia() requires a user gesture.
+   */
+  enabled?: boolean;
+  intervalMs?: number;
+  maxWidth?: number;
+  quality?: number;
+  displaySurface?: 'browser' | 'window' | 'monitor';
+}
+
+/** One periodic still. Emitted as a snapshot event; never a violation. */
+export interface Snapshot {
+  source: 'webcam' | 'page';
+  at: string;
+  /** JPEG data URL. */
+  dataUrl: string;
+  bytes: number;
+  width: number | null;
+  height: number | null;
 }
 
 export interface ReportOptions {
@@ -241,10 +288,12 @@ export interface ProctorOptions {
   tabs?: TabsOptions;
   rightClick?: RightClickOptions;
   shortcuts?: ShortcutsOptions;
+  clipboard?: ClipboardOptions;
   camera?: CameraOptions;
   face?: FaceOptions;
   audio?: AudioOptions;
   thirdParty?: ThirdPartyOptions;
+  pageCapture?: PageCaptureOptions;
   backend?: BackendOptions;
   report?: ReportOptions;
   logLevel?: LogLevel;
@@ -255,6 +304,7 @@ export interface ProctorEvents {
   ready: unknown;
   started: { startedAt: string; detectors: string[] };
   violation: Violation;
+  snapshot: Snapshot;
   'detector:ready': { detector: string };
   'detector:error': { detector: string; error: Error };
   'detector:enabled': { detector: string };
@@ -287,10 +337,19 @@ export declare class Proctor {
   disableDetector(name: string): boolean;
   clearViolations(): void;
 
+  /**
+   * Start periodic stills of a screen the candidate shares. Must be called from
+   * a user gesture. Rejects when pageCapture.enabled is false.
+   */
+  startPageCapture(): Promise<MediaStream>;
+  /** Stop page capture and release the shared surface. Safe when idle. */
+  stopPageCapture(): void;
+  isPageCapturing(): boolean;
+
   reportViolation(
     type: ViolationType | string,
     details?: Record<string, unknown>,
-    meta?: { detector?: string; severity?: Severity; timestamp?: number }
+    meta?: { detector?: string; severity?: Severity; timestamp?: number; terminal?: boolean }
   ): Violation | null;
 }
 

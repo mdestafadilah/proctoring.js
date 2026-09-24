@@ -44,7 +44,9 @@ Design rules it follows:
 - **No hidden network calls.** Nothing leaves the page unless you set
   `backend.endpoint`.
 - **Nothing is recorded.** Audio is analysed in memory and discarded; no
-  `MediaRecorder`, no screenshots unless you opt in.
+  `MediaRecorder`, and no screenshots or periodic snapshots unless you opt in.
+  The clipboard is never read — copy/paste detection records that it happened,
+  where, and how many characters, never the characters themselves.
 - **A broken feature never kills the session.** If the camera is denied, tab
   monitoring keeps running and you get a `detector:error` event.
 - **Permissions are opt-in.** Only tab detection is on by default, because it
@@ -56,16 +58,19 @@ Design rules it follows:
 
 | Detector | Default | Permissions | What it catches |
 |---|---|---|---|
-| `tabs` | **on** | none | Tab switch, window blur, page hidden |
+| `tabs` | **on** | none | Tab switch, window blur, page hidden, page torn down |
 | `rightClick` | off | none | Right-click, keyboard Menu key, long-press menu |
 | `shortcuts` | off | none | DevTools / view-source shortcuts (`Ctrl+Shift+I`, `F12`, `Ctrl+U`, …) |
+| `clipboard` | off | none | Copy, cut and paste, with the element it happened in |
 | `camera` | off | camera | Denied camera, muted track, covered lens, frozen feed, unplugged device |
 | `face` | off | camera (shared) | No face, multiple faces, looking away |
 | `audio` | off | microphone | Sustained loud noise, spectral busyness |
 | `thirdParty` | off | camera (for labels) | Virtual cameras, loopback audio cables, screen shares |
 
 Face detection reuses the camera detector's stream, so enabling both costs one
-permission prompt, not two.
+permission prompt, not two. The same is true of `thirdParty.detectActiveCamera`.
+
+Periodic snapshots are not a detector: see [Periodic snapshots](#periodic-snapshots).
 
 ---
 
@@ -84,6 +89,7 @@ new Proctor({
     trackWindowBlur: true,          // also flag focus loss, not just tab switch
     minHiddenMs: 0,                 // ignore flicker shorter than this
     throttleMs: 300,
+    reportOnClose: false,           // report tab-closed as the page goes away
   },
 
   rightClick: {
@@ -101,6 +107,14 @@ new Proctor({
     block: false,                   // preventDefault the shortcut (opt-in)
   },
 
+  clipboard: {
+    enabled: false,
+    actions: ['copy', 'cut', 'paste'],
+    block: false,                   // preventDefault the operation (opt-in)
+    throttleMs: 250,                // per action, not shared across them
+    ignoreSelectors: null,          // CSS selectors for your own UI
+  },
+
   camera: {
     enabled: false,
     videoElement: '#preview',       // selector, element, or null for no preview
@@ -109,6 +123,7 @@ new Proctor({
     detectMuted: true,              // lens covered / revoked
     detectEnded: true,              // device unplugged
     throttleMs: 2000,
+    snapshotIntervalMs: 0,          // periodic webcam stills; 0 = off
   },
 
   face: {
@@ -145,9 +160,18 @@ new Proctor({
     throttleMs: 2000,
   },
 
+  pageCapture: {
+    enabled: false,                 // gates startPageCapture(); nothing starts itself
+    intervalMs: 30000,              // snapshot cadence
+    maxWidth: 640,
+    quality: 0.6,
+    displaySurface: 'browser',      // browser | window | monitor (a hint only)
+  },
+
   backend: {
     enabled: false,
     endpoint: null,                 // POST target for violations
+    snapshotEndpoint: null,         // separate target for snapshots; falls back
     batchIntervalMs: 0,             // 0 = send immediately
     offlineQueue: true,             // retry when the network returns
     includeReport: false,
@@ -189,6 +213,7 @@ off(); // unsubscribe
 |---|---|---|
 | `started` | `{ startedAt, detectors }` | `start()` resolved |
 | `violation` | `Violation` | any detector fires |
+| `snapshot` | `Snapshot` | a periodic still was taken |
 | `detector:ready` | `{ detector }` | one detector initialised |
 | `detector:error` | `{ detector, error }` | one detector failed |
 | `detector:enabled` / `detector:disabled` | `{ detector }` | toggled at runtime |
@@ -205,9 +230,13 @@ Use `once()` for one-shot listeners and `off()` to remove one.
 | Type | Default severity | Meaning |
 |---|---|---|
 | `tab-hidden` | high | The page was hidden past `minHiddenMs` |
+| `tab-closed` | high | The page is going away (close, reload or navigation) |
 | `window-blur` | medium | Window lost focus while still visible |
 | `right-click` | medium | Right-click, Menu key, or long-press inside the page |
 | `shortcut-used` | high | A watched keyboard shortcut was pressed |
+| `clipboard-copy` | medium | Text was copied out of the page |
+| `clipboard-cut` | medium | Text was cut out of the page |
+| `clipboard-paste` | medium | Text was pasted into the page |
 | `camera-denied` | critical | Permission refused |
 | `camera-disabled` | critical | Track ended — device gone or revoked |
 | `camera-muted` | high | Track muted, or the image froze |
@@ -481,6 +510,50 @@ several, never as proof that DevTools was not used.
 
 ---
 
+## Copy / paste
+
+Detects copy, cut and paste inside the page, and records *where* it happened. No
+permission and no user gesture: these are ordinary DOM events.
+
+| Signal | Violation | Details |
+|---|---|---|
+| `copy` | `clipboard-copy` | `target`, `textLength` |
+| `cut` | `clipboard-cut` | `target`, `textLength` |
+| `paste` | `clipboard-paste` | `target`, `textLength` |
+
+```js
+new Proctor({
+  clipboard: {
+    enabled: true,
+    actions: ['copy', 'cut', 'paste'],  // any subset
+    block: false,                       // true also preventDefault()s the operation
+    throttleMs: 250,                    // per action, so a copy cannot swallow a paste
+    ignoreSelectors: ['#host-toolbar'], // your own UI, e.g. a "copy question" button
+  },
+})
+```
+
+The listeners sit in the **capture phase** on `document`, so a page calling
+`stopPropagation()` cannot hide the gesture — the same reasoning as the
+right-click detector. `block: true` calls `preventDefault()` on *every* event,
+including ones whose report is throttled: suppressing only the reported ones
+would let the second copy inside the throttle window go through silently.
+
+### What it does not do
+
+**The clipboard is never read.** `textLength` is measured from the event's own
+`clipboardData` — data the browser has already handed the page by virtue of the
+event firing — and the string is discarded on the same line it is measured.
+`navigator.clipboard.readText()` is never called: it needs a `clipboard-read`
+permission prompt, and it would turn a behavioural signal into content
+surveillance. If you need the text, read it in your own `copy` handler and decide
+for yourself what to store.
+
+**Only this page is observable.** A paste into Word, or a copy made in another
+tab, never reaches these listeners. Silence means "not here", not "not happening".
+
+---
+
 ## Audio detection
 
 Two signals, both from the same microphone stream:
@@ -608,6 +681,65 @@ Two caveats worth designing around:
 
 ---
 
+## Periodic snapshots
+
+Stills taken on a timer, emitted as `snapshot`. They are **samples, not
+violations**: they never enter the report, the score, or the screenshot budget.
+
+| Source | How to enable | What it captures |
+|---|---|---|
+| `webcam` | `camera.snapshotIntervalMs > 0` | The candidate's camera, read from the stream the camera detector already holds |
+| `page` | `pageCapture.enabled` + `proctor.startPageCapture()` | A screen the candidate chose to share |
+
+```js
+const proctor = new Proctor({
+  camera: { enabled: true, videoElement: '#preview', snapshotIntervalMs: 30000 },
+  pageCapture: { enabled: true, intervalMs: 30000, maxWidth: 640 },
+  backend: {
+    enabled: true,
+    endpoint: 'https://api.example/violations',
+    snapshotEndpoint: 'https://api.example/snapshots', // falls back to endpoint
+  },
+});
+
+proctor.on('snapshot', (s) => console.log(s.source, s.bytes));
+await proctor.start();
+```
+
+Each snapshot is `{ source, at, dataUrl, bytes, width, height }`. It is emitted as
+an event and, when a backend is configured, POSTed as `{ snapshots: [ … ] }` to
+`backend.snapshotEndpoint`. Snapshots are **not queued and not retried** — a
+backlog of stale frames arriving late is worse than a gap, and there is always
+another one coming. A failed upload is swallowed.
+
+### Page capture needs a click, and cannot be faked
+
+```js
+// From a click handler — never from start().
+button.addEventListener('click', () => proctor.startPageCapture());
+```
+
+A page cannot rasterise its own DOM: there is no native DOM-to-image API, and
+`html2canvas` would be a runtime dependency, which this library does not take. The
+only zero-dependency route is `getDisplayMedia()`, and the browser gates that on
+**transient activation** — so `startPageCapture()` has to be called from a real
+user gesture and can never run unattended. `pageCapture.enabled` merely permits
+the call; nothing switches it on by itself.
+
+The candidate picks the surface, so `displaySurface: 'browser'` is a hint about
+what to ask for, not a guarantee of what they choose. Capture also ends by itself
+when they press "Stop sharing" in the browser's own UI.
+
+> **Watch out:** with `thirdParty.detectScreenShare` on, your own page capture is
+> reported as `screen-share-started`. That is correct — the page really is sharing
+> its screen — but it means the two features flag each other. Filter out the
+> `source: 'getDisplayMedia'` event, or leave `detectScreenShare` off.
+
+`stopPageCapture()` releases the surface and is safe to call when idle;
+`isPageCapturing()` reports the current state.
+
+---
+
 ## Sending violations to a backend
 
 ```js
@@ -636,6 +768,25 @@ Reliability behaviour:
   fires.
 - **`offlineQueue`** keeps unsent violations in memory and flushes on the next
   successful request.
+
+### Reporting while the page is dying
+
+`tabs.reportOnClose` raises `tab-closed` from the `pagehide` handler — the last
+reliable moment before a document is torn down. Delivery there is a special case,
+and an easy one to get wrong:
+
+- The transport's own `pagehide` listener is registered when the session is
+  constructed, so it runs **before** the detector's and flushes an empty queue.
+  A `tab-closed` queued after that would die with the document.
+- So a terminal violation skips the queue entirely and goes straight out over
+  `sendBeacon`. `proctor.reportViolation(type, details, { terminal: true })` does
+  the same for your own end-of-session reports.
+
+Two honest caveats. `pagehide` fires for a **close, a reload and a navigation**
+alike, and no API separates them, so `tab-closed` means "the page went away".
+And delivery is best-effort: `beforeunload` may not run at all, and a beacon can
+still be dropped. Treat a missing `tab-closed` as **unknown**, never as "clean" —
+which is why it is off by default.
 
 ---
 
@@ -736,6 +887,11 @@ not as proof.
   frames and may create a legal obligation to notify candidates. The frames are
   never persisted to storage and never uploaded unless you also enable the
   backend.
+- Periodic snapshots (`camera.snapshotIntervalMs`, `pageCapture`) are off by
+  default for the same reason. Page capture additionally requires the candidate
+  to grant screen sharing from a click, so it can never start on its own.
+- The clipboard is never read. Copy/paste detection records the event, the
+  element it happened in, and the character count — never the text.
 - Audio is analysed in memory and discarded — the library never records it.
 - Always tell candidates what is being monitored before the session starts.
 
@@ -747,15 +903,15 @@ not as proof.
 npm install
 npm run dev              # demo page at http://localhost:5173/demo.html
 npm run build            # emits dist/proctoring.js, .cjs, .umd.js + index.d.ts
-npm test                 # build + 132 checks against the built artifact
+npm test                 # build + 157 checks against the built artifact
 ```
 
-Five suites, 208 checks in total:
+Five suites, 246 checks in total:
 
 | Command | Checks | What it proves |
 |---|---|---|
-| `npm run verify` | 132 | Build output, exports, report math, screenshot helpers, right-click + shortcut + face + audio + third-party decision logic |
-| `npm run verify:browser` | 51 | Real Edge: tab switch, right-click, keyboard shortcuts, camera stream, audio sampler, device scan, live-camera-track match, `getDisplayMedia` wrap/restore, teardown, screenshots |
+| `npm run verify` | 157 | Build output, exports, report math, screenshot helpers, and the decision logic of every detector including clipboard, tab-close and snapshot routing |
+| `npm run verify:browser` | 64 | Real Edge: tab switch, right-click, keyboard shortcuts, camera stream, audio sampler, device scan, live-camera-track match, real copy/cut/paste, tab-closed beaconing, webcam and page snapshots, `getDisplayMedia` wrap/restore, teardown, screenshots |
 | `npm run verify:umd` | 6 | The `<script src>` path via a plain static server |
 | `npm run verify:face` | 7 | face-api CDN + weights resolve and inference runs |
 | `npm run verify:static` | 12 | The deployed demo shape: one HTML file + the published CDN bundle |
@@ -815,19 +971,26 @@ Two deliberate testing choices worth knowing:
   `virtual-camera-active` before forcing a match by declaring the local label as
   a pattern — and asserts it fires once, not once per tick.
 
-Right-click detection and keyboard shortcuts get the opposite treatment:
-`verify:browser` pushes a **real** right-click and a **real** `Ctrl+Shift+I`
-through Edge's input pipeline via `Input.dispatchMouseEvent` /
-`Input.dispatchKeyEvent`, because a page-scripted `dispatchEvent` proves only that
-a listener exists — it cannot trigger a browser shortcut, so it cannot prove the
-detector sees what a user produces. That is how the double-count bug in
-`throttleMs: 0` was found: the unit tests were happy with a config the browser
-then disproved.
+Right-click detection, keyboard shortcuts and clipboard detection get the
+opposite treatment: `verify:browser` pushes a **real** right-click, a **real**
+`Ctrl+Shift+I` and a **real** `Ctrl+C` / `Ctrl+X` / `Ctrl+V` through Edge's input
+pipeline via `Input.dispatchMouseEvent` / `Input.dispatchKeyEvent`, because a
+page-scripted `dispatchEvent` proves only that a listener exists — it cannot
+trigger a browser shortcut, so it cannot prove the detector sees what a user
+produces. That is how the double-count bug in `throttleMs: 0` was found: the unit
+tests were happy with a config the browser then disproved.
 
 The genuine keystroke check runs with `block: true`, which serves two purposes at
 once — it proves `preventDefault` reaches the browser before the shortcut is
 acted on, and it stops Edge from actually opening DevTools in the middle of the
-run.
+run. The same check proves `clipboard.block` suppresses a real copy, observed
+through `defaultPrevented` on a listener registered *after* the detector's.
+
+Two more things only a browser can prove. `tab-closed` is dispatched as a genuine
+`PageTransitionEvent` on the real `window`, with `navigator.sendBeacon` stubbed —
+which is what shows the violation leaves the page instead of dying in the queue.
+And periodic snapshots are checked against real pixels: a live track for the
+webcam source, and a genuine `getDisplayMedia` surface for the page source.
 
 > The UMD check spawns its own static server rather than using Vite, because
 > Vite's dev server pipes every `.js` through its ESM transform and would inject

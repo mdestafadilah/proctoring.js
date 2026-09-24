@@ -63,7 +63,7 @@ try {
   })()`);
 
   assert.equal(api.hasProctor, true, 'Proctor must be exported');
-  assert.deepEqual(api.detectors, ['tabs', 'rightClick', 'shortcuts', 'camera', 'face', 'audio', 'thirdParty']);
+  assert.deepEqual(api.detectors, ['tabs', 'rightClick', 'shortcuts', 'clipboard', 'camera', 'face', 'audio', 'thirdParty']);
   assert.equal(api.version, version);
   assert.ok(api.modelUrl.startsWith('https://cdn.jsdelivr.net/'), 'model URL must be a CDN URL');
   ok(`module loads in browser (${api.keys.length} exports, v${api.version})`);
@@ -1197,7 +1197,341 @@ try {
   ok(`the live camera track is matched once, not once per tick (matched="${virtual[0].details.matched}")`);
 
   // ---------------------------------------------------------------------
-  // 11. No console noise.
+  // 11. Clipboard detector against genuine keystrokes.
+  //    A synthetic `dispatchEvent` would only prove a listener exists. Ctrl+C
+  //    pushed through the browser's own input pipeline proves the capture-phase
+  //    wiring, which is the part a page could otherwise hide.
+  // ---------------------------------------------------------------------
+  console.log('\nBrowser: clipboard detector');
+
+  const clipSetup = await page.evaluate(`(async () => {
+    const { Proctor } = await import('/src/index.js');
+
+    const input = document.createElement('textarea');
+    input.id = 'clip-probe';
+    input.value = 'exam question text';
+    document.body.appendChild(input);
+    input.focus();
+    input.select();
+
+    const proctor = new Proctor({
+      logLevel: 'silent',
+      report: { persist: false },
+      tabs: { enabled: false },
+      clipboard: { enabled: true, throttleMs: 0, block: false },
+    });
+
+    window.__clip = { events: [], prevented: [] };
+    proctor.on('violation', (v) => window.__clip.events.push({ type: v.type, details: v.details }));
+
+    // Registered in the bubble phase, so it runs *after* the detector's
+    // capture-phase listener and can observe what the detector suppressed.
+    document.addEventListener('copy', (e) => window.__clip.prevented.push(e.defaultPrevented));
+
+    await proctor.start();
+    window.__clipProctor = proctor;
+
+    return { status: proctor.getDetectorState('clipboard')?.status ?? null };
+  })()`);
+
+  assert.equal(clipSetup.status, 'running', 'the clipboard detector must reach a running state');
+  ok('the clipboard detector attaches in a real page');
+
+  const selectAll = () =>
+    page.evaluate(`(() => {
+      const input = document.getElementById('clip-probe');
+      input.focus();
+      input.select();
+      return input.value.length;
+    })()`);
+
+  await selectAll();
+  await pressShortcut({ key: 'c', code: 'KeyC', modifiers: MOD.ctrl, vk: 67 });
+  await selectAll();
+  await pressShortcut({ key: 'x', code: 'KeyX', modifiers: MOD.ctrl, vk: 88 });
+  await selectAll();
+  await pressShortcut({ key: 'v', code: 'KeyV', modifiers: MOD.ctrl, vk: 86 });
+
+  const clipResult = await page.evaluate(`(() => {
+    const proctor = window.__clipProctor;
+    proctor.destroy();
+    document.getElementById('clip-probe')?.remove();
+    return { ...window.__clip, total: proctor.getReport().total };
+  })()`);
+
+  assert.deepEqual(
+    clipResult.events.map((e) => e.type).sort(),
+    ['clipboard-copy', 'clipboard-cut', 'clipboard-paste'],
+    `expected one violation per real keystroke, got ${JSON.stringify(clipResult.events)}`
+  );
+  ok('a real Ctrl+C / Ctrl+X / Ctrl+V each produce their own violation');
+
+  assert.ok(
+    clipResult.events.every((e) => e.details.target === 'textarea#clip-probe'),
+    `each violation must name the element it happened in: ${JSON.stringify(clipResult.events.map((e) => e.details.target))}`
+  );
+  ok('each clipboard violation names the element it happened in');
+
+  assert.ok(
+    clipResult.events.every((e) => typeof e.details.textLength === 'number'),
+    `the selection length must be measured: ${JSON.stringify(clipResult.events.map((e) => e.details))}`
+  );
+  assert.ok(
+    !JSON.stringify(clipResult.events).includes('exam question text'),
+    'the clipboard contents must never appear in a violation'
+  );
+  ok('the length is recorded and the clipboard contents are not');
+
+  assert.equal(clipResult.prevented.some(Boolean), false, 'block:false must not suppress the copy');
+  ok('block:false leaves the real clipboard operation alone');
+
+  // Now the opposite posture: `block: true` must suppress a genuine copy, which
+  // is only observable through `defaultPrevented` on a later listener.
+  const clipBlocked = await page.evaluate(`(async () => {
+    const { Proctor } = await import('/src/index.js');
+
+    const input = document.createElement('textarea');
+    input.id = 'clip-blocked';
+    input.value = 'do not copy me';
+    document.body.appendChild(input);
+    input.focus();
+    input.select();
+
+    const proctor = new Proctor({
+      logLevel: 'silent',
+      report: { persist: false },
+      tabs: { enabled: false },
+      clipboard: { enabled: true, block: true, throttleMs: 0 },
+    });
+
+    window.__blocked = [];
+    document.addEventListener('copy', (e) => window.__blocked.push(e.defaultPrevented));
+
+    await proctor.start();
+    window.__blockedProctor = proctor;
+    return true;
+  })()`);
+
+  assert.equal(clipBlocked, true);
+  await page.evaluate(`(() => {
+    const input = document.getElementById('clip-blocked');
+    input.focus();
+    input.select();
+  })()`);
+  await pressShortcut({ key: 'c', code: 'KeyC', modifiers: MOD.ctrl, vk: 67 });
+
+  const blockedResult = await page.evaluate(`(() => {
+    const proctor = window.__blockedProctor;
+    const prevented = window.__blocked.slice();
+    proctor.destroy();
+    document.getElementById('clip-blocked')?.remove();
+    return prevented;
+  })()`);
+
+  assert.ok(
+    blockedResult.some(Boolean),
+    `block:true must call preventDefault on a real copy: ${JSON.stringify(blockedResult)}`
+  );
+  ok('block:true suppresses a genuine copy in the real input pipeline');
+
+  // ---------------------------------------------------------------------
+  // 12. Tab close, delivered while the document is going away.
+  //
+  //     A synthetic PageTransitionEvent, but dispatched on the *real* window and
+  //     consumed by the *real* listener. What matters here is the delivery path:
+  //     the transport's own `pagehide` flush has already run by the time the
+  //     detector reports, so a queued send would be lost. `sendBeacon` is
+  //     stubbed, so this proves the routing without touching the network.
+  // ---------------------------------------------------------------------
+  console.log('\nBrowser: tab close');
+
+  const tabClose = await page.evaluate(`(async () => {
+    const { Proctor } = await import('/src/index.js');
+
+    const ENDPOINT = 'https://proctor.invalid/collect';
+    const proctor = new Proctor({
+      logLevel: 'silent',
+      report: { persist: false },
+      tabs: { enabled: true, reportOnClose: true },
+      backend: { enabled: true, endpoint: ENDPOINT },
+    });
+
+    const beacons = [];
+    const originalBeacon = navigator.sendBeacon;
+    navigator.sendBeacon = (url, blob) => {
+      beacons.push({ url, size: blob ? blob.size : 0 });
+      return true;
+    };
+
+    const violations = [];
+    proctor.on('violation', (v) => violations.push({ type: v.type, details: v.details }));
+
+    const sent = [];
+    const originalSend = proctor.transport.send.bind(proctor.transport);
+    proctor.transport.send = (violation, options) => {
+      sent.push({ type: violation.type, terminal: options ? options.terminal === true : false });
+      return originalSend(violation, options);
+    };
+
+    await proctor.start();
+
+    window.dispatchEvent(new PageTransitionEvent('pagehide', { persisted: false }));
+    await new Promise((done) => setTimeout(done, 60));
+
+    proctor.destroy();
+    navigator.sendBeacon = originalBeacon;
+
+    return { violations, sent, beacons, endpoint: ENDPOINT };
+  })()`);
+
+  assert.equal(tabClose.violations.length, 1, `expected one tab-closed: ${JSON.stringify(tabClose.violations)}`);
+  assert.equal(tabClose.violations[0].type, 'tab-closed');
+  assert.equal(tabClose.violations[0].details.wasVisible, true);
+  ok('a real pagehide reports tab-closed');
+
+  assert.equal(tabClose.sent[0].terminal, true, 'tab-closed must be routed as terminal');
+  ok('tab-closed is routed past the queue, which has already been flushed');
+
+  assert.equal(
+    tabClose.beacons.length,
+    1,
+    `the violation must leave over sendBeacon, got ${JSON.stringify(tabClose.beacons)}`
+  );
+  assert.equal(tabClose.beacons[0].url, tabClose.endpoint);
+  assert.ok(tabClose.beacons[0].size > 0, 'the beacon payload must not be empty');
+  ok('the violation is beaconed out with the document, not lost with it');
+
+  // ---------------------------------------------------------------------
+  // 13. Periodic snapshots.
+  //     Webcam first: a real JPEG from the live track, on a timer, with the
+  //     report untouched. Then page capture, which needs getDisplayMedia.
+  // ---------------------------------------------------------------------
+  console.log('\nBrowser: periodic snapshots');
+
+  const snapshots = await page.evaluate(`(async () => {
+    const { Proctor } = await import('/src/index.js');
+
+    const video = document.createElement('video');
+    video.id = 'snap-preview';
+    video.muted = true;
+    video.playsInline = true;
+    document.body.appendChild(video);
+
+    const proctor = new Proctor({
+      logLevel: 'silent',
+      report: { persist: false },
+      tabs: { enabled: false },
+      camera: {
+        enabled: true,
+        videoElement: '#snap-preview',
+        throttleMs: 0,
+        snapshotIntervalMs: 60,
+      },
+    });
+
+    const shots = [];
+    const violations = [];
+    proctor.on('snapshot', (s) =>
+      shots.push({ source: s.source, bytes: s.bytes, width: s.width, height: s.height, head: s.dataUrl.slice(0, 22) })
+    );
+    proctor.on('violation', (v) => violations.push({ type: v.type }));
+
+    await proctor.start();
+    await new Promise((done) => setTimeout(done, 420));
+
+    const report = proctor.getReport();
+    proctor.destroy();
+    video.remove();
+
+    return { shots, violations, total: report.total, score: report.score };
+  })()`);
+
+  assert.ok(
+    snapshots.shots.length >= 2,
+    `expected several snapshots from a 60ms interval, got ${snapshots.shots.length}`
+  );
+  assert.ok(
+    snapshots.shots.every((s) => s.source === 'webcam'),
+    'every webcam snapshot must be labelled as such'
+  );
+  assert.ok(
+    snapshots.shots.every((s) => s.head.startsWith('data:image/jpeg')),
+    `snapshots must be JPEG data URLs, got ${JSON.stringify(snapshots.shots[0])}`
+  );
+  assert.ok(
+    snapshots.shots.every((s) => s.bytes > 0 && s.width > 0 && s.height > 0),
+    `every snapshot must carry real pixels: ${JSON.stringify(snapshots.shots[0])}`
+  );
+  ok(`webcam snapshots capture real frames (${snapshots.shots.length} taken, ${snapshots.shots[0].bytes} bytes)`);
+
+  assert.equal(snapshots.total, 0, 'a snapshot is a sample, not a violation');
+  assert.equal(snapshots.score, 100);
+  assert.deepEqual(snapshots.violations, [], 'snapshots must not disturb the report');
+  ok('snapshots never enter the report or the score');
+
+  // Page capture. `getDisplayMedia` is gated on transient activation, which a
+  // scripted run cannot produce — but Edge's fake-UI flag auto-accepts, so this
+  // either proves a real page frame or records the honest refusal.
+  const pageCapture = await page.evaluate(`(async () => {
+    const { Proctor } = await import('/src/index.js');
+
+    const proctor = new Proctor({
+      logLevel: 'silent',
+      report: { persist: false },
+      tabs: { enabled: false },
+      pageCapture: { enabled: true, intervalMs: 80, maxWidth: 320 },
+    });
+
+    const shots = [];
+    proctor.on('snapshot', (s) => shots.push({ source: s.source, bytes: s.bytes }));
+
+    await proctor.start();
+
+    let started = false;
+    let error = null;
+    try {
+      await proctor.startPageCapture();
+      started = true;
+    } catch (err) {
+      error = err.name + ': ' + err.message;
+    }
+
+    if (started) await new Promise((done) => setTimeout(done, 420));
+
+    const capturing = proctor.isPageCapturing();
+    proctor.stopPageCapture();
+    const afterStop = proctor.isPageCapturing();
+    proctor.destroy();
+
+    return { started, error, shots, capturing, afterStop };
+  })()`);
+
+  if (pageCapture.started) {
+    assert.equal(pageCapture.capturing, true, 'isPageCapturing() must be true while running');
+    assert.ok(
+      pageCapture.shots.length >= 2,
+      `expected page snapshots on an 80ms interval, got ${pageCapture.shots.length}`
+    );
+    assert.ok(
+      pageCapture.shots.every((s) => s.source === 'page' && s.bytes > 0),
+      `page snapshots must be real frames: ${JSON.stringify(pageCapture.shots[0])}`
+    );
+    ok(`page capture takes real frames from the shared surface (${pageCapture.shots.length})`);
+  } else {
+    // A refusal is a legitimate outcome, but it must be a clear one.
+    assert.match(
+      String(pageCapture.error),
+      /NotAllowedError|InvalidStateError|AbortError/,
+      `an unusable getDisplayMedia must fail with a named error, got ${pageCapture.error}`
+    );
+    ok(`page capture refused cleanly without a gesture (${pageCapture.error})`);
+  }
+
+  assert.equal(pageCapture.afterStop, false, 'stopPageCapture() must release the surface');
+  ok('stopPageCapture() releases the shared surface');
+
+  // ---------------------------------------------------------------------
+  // 14. No console noise.
   // ---------------------------------------------------------------------
   console.log('\nBrowser: console');
   const realErrors = page.errors.filter(

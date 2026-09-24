@@ -31,14 +31,60 @@ export class BackendTransport {
     return Boolean(this.options.enabled && this.options.endpoint);
   }
 
-  /** Queue a violation. Sends immediately when batching is disabled. */
-  send(violation) {
+  /**
+   * Queue a violation. Sends immediately when batching is disabled.
+   *
+   * @param {object} violation
+   * @param {object} [options]
+   * @param {boolean} [options.terminal] the document is being torn down
+   */
+  send(violation, { terminal = false } = {}) {
     if (!this.enabled) return;
+
+    /**
+     * A terminal violation is raised while the document is unloading — the tab
+     * is closing, or the page is navigating away. Queuing it would be pointless
+     * twice over: this transport's own `pagehide` listener has already run and
+     * flushed an empty queue, and the `fetch` the queue would start is cancelled
+     * with the document. `sendBeacon` is the only channel that survives, so a
+     * terminal violation skips the queue entirely.
+     */
+    if (terminal) {
+      this._request([violation], { keepalive: true }).catch(() => {
+        /* Nothing useful can be done while the page is unloading. */
+      });
+      return;
+    }
+
     this.queue.push(violation);
 
     if (this.options.batchIntervalMs <= 0) {
       this.flush();
     }
+  }
+
+  /**
+   * Send one periodic snapshot.
+   *
+   * Deliberately not queued and not retried. A snapshot is a sample, not
+   * evidence: a backlog of stale frames arriving ten minutes late is worse than
+   * a gap, and there is always another one coming. Failures are swallowed so a
+   * dead endpoint cannot disturb the session.
+   *
+   * @param {object} snapshot { source, at, dataUrl, bytes, ... }
+   */
+  sendSnapshot(snapshot) {
+    if (!this.enabled) return;
+
+    const endpoint = this.options.snapshotEndpoint || this.options.endpoint;
+    const payload = JSON.stringify({
+      snapshots: [snapshot],
+      sentAt: new Date().toISOString(),
+    });
+
+    this._sendOnce(payload, { keepalive: false, endpoint }).catch(() => {
+      /* A dropped snapshot is not worth disturbing the session over. */
+    });
   }
 
   /** Flush the queue to the endpoint. Safe to call concurrently. */
@@ -92,8 +138,9 @@ export class BackendTransport {
     }
   }
 
-  _sendOnce(payload, { keepalive }) {
-    const { endpoint, method, headers, timeoutMs } = this.options;
+  _sendOnce(payload, { keepalive, endpoint: overrideEndpoint }) {
+    const { method, headers, timeoutMs } = this.options;
+    const endpoint = overrideEndpoint || this.options.endpoint;
 
     // sendBeacon cannot set headers, so it is only usable for a plain POST.
     if (keepalive && method === 'POST' && typeof navigator !== 'undefined' && navigator.sendBeacon) {

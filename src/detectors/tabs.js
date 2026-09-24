@@ -96,15 +96,43 @@ export class TabsDetector {
     doc.addEventListener('visibilitychange', this._onVisibility);
 
     /**
-     * `pagehide` catches the case where the user navigates away, and
-     * `freeze`/`resume` cover the Page Lifecycle API on mobile. These are
-     * best-effort: `beforeunload` may not run at all.
+     * `pagehide` is the last reliable moment before the document goes away. It
+     * fires for a close, a reload and a navigation alike, and no API separates
+     * the three — so `tab-closed` means "the page went away", not specifically
+     * "the tab was closed". Best-effort by nature: `beforeunload` may not run at
+     * all, and the report may still be dropped on the way out.
      */
-    this._onPageHide = () => {
-      if (!this.hidden) {
+    this._onPageHide = (event) => {
+      /**
+       * `persisted` means the page is entering the back/forward cache rather
+       * than going away. It is kept alive and will be resumed, so nothing has
+       * been abandoned and reporting here would be a false positive.
+       */
+      if (event?.persisted) return;
+
+      // Read before mutating: closing while still looking at the page and
+      // closing after switching away are different events to a proctor.
+      const wasVisible = !this.hidden;
+
+      if (wasVisible) {
         this.hidden = true;
         this.hiddenSince = Date.now();
       }
+
+      if (!this.config.reportOnClose) return;
+
+      this.context.setState('tabs', { active: true, status: 'closed', hidden: true });
+      this.context.log('warn', 'Page is going away (tab closed, reloaded or navigated)');
+      this.context.report(
+        VIOLATION_TYPES.TAB_CLOSED,
+        { at: new Date().toISOString(), wasVisible },
+        /**
+         * `terminal` routes this past the queue and straight to `sendBeacon`.
+         * The transport's own `pagehide` flush has already run by now, and the
+         * `fetch` a queued send would start is cancelled with the document.
+         */
+        { detector: 'tabs', terminal: true }
+      );
     };
     window.addEventListener('pagehide', this._onPageHide);
 

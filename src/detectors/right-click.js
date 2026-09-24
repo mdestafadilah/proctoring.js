@@ -1,5 +1,5 @@
 import { VIOLATION_TYPES } from '../core/options.js';
-import { throttle } from '../core/utils.js';
+import { throttle, describeTarget } from '../core/utils.js';
 
 /**
  * Right-click / context-menu detector.
@@ -155,33 +155,4 @@ export class RightClickDetector {
     this._destroyed = true;
     this.context.setState('rightClick', { active: false, status: 'destroyed' });
   }
-}
-
-/**
- * A short, human-readable description of the element that was right-clicked,
- * e.g. `button#submit.primary`.
- *
- * Tag + id + first three classes rather than a full CSS path: a path is noisy in
- * a report and tells the server far more about the page's structure than the
- * evidence actually needs.
- */
-function describeTarget(target) {
-  if (!target || typeof target !== 'object') return null;
-  // DOCUMENT_NODE — a right-click on the page background.
-  if (target.nodeType === 9) return 'document';
-
-  const tag = typeof target.tagName === 'string' ? target.tagName.toLowerCase() : null;
-  if (!tag) return null;
-
-  const id = typeof target.id === 'string' && target.id ? `#${target.id}` : '';
-  // SVG elements expose className as an SVGAnimatedString, not a string.
-  const rawClass = typeof target.className === 'string' ? target.className : '';
-  const classes = rawClass
-    .split(/\s+/)
-    .filter(Boolean)
-    .slice(0, 3)
-    .map((name) => `.${name}`)
-    .join('');
-
-  return `${tag}${id}${classes}`.slice(0, 120);
 }
